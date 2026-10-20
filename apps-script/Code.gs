@@ -4,13 +4,12 @@
  * Este archivo reemplaza completo al Code.gs anterior. Va en el proyecto de Apps Script
  * ligado a la hoja "Finanzas Matt · Base de datos" (cuenta matturano1@gmail.com).
  *
- * Primera vez:
- *   1. Ejecuta revisarEstructura()   → solo muestra qué haría. No cambia nada.
- *   2. Ejecuta actualizarEstructura() → crea pestañas y columnas nuevas sin borrar datos.
- *   3. Ejecuta generarClave()         → crea la clave secreta. Cópiala del registro.
- *   4. Implementar → Nueva implementación → Aplicación web:
- *        Ejecutar como: Yo · Quién tiene acceso: Cualquier usuario.
- *      Copia la URL que termina en /exec. La URL y la clave se escriben en la app, nunca aquí.
+ * Primera vez (no hay que ejecutar nada a mano):
+ *   1. Implementar → Nueva implementación → Aplicación web:
+ *        Ejecutar como: Yo · Quién tiene acceso: Cualquier usuario. Autoriza con tu cuenta.
+ *   2. En la app pega la URL /exec e inventa una clave (mínimo 8 caracteres).
+ *      La primera conexión guarda esa clave y actualiza la hoja sola, sin borrar datos.
+ * Opcional desde el menú de la hoja: revisarEstructura(), actualizarEstructura(), generarClave().
  *
  * Toda la información vive en la hoja. La app solo guarda una copia en cada dispositivo
  * para abrir sin internet.
@@ -192,7 +191,16 @@ function doPost(e) {
 
   try {
     if (pedido.accion === 'ping') return json_({ ok: true, version: VERSION_API, hoja: libro_().getName() });
-    if (pedido.accion === 'leer') return json_({ ok: true, version: VERSION_API, datos: leerTodo_() });
+    if (pedido.accion === 'leer') {
+      const lock = LockService.getScriptLock();
+      lock.waitLock(25000);
+      try {
+        const migracion = faltaEstructura_() ? estructura_(true, true) : '';
+        const datos = leerTodo_();
+        datos.migracion = migracion;
+        return json_({ ok: true, version: VERSION_API, datos: datos });
+      } finally { lock.releaseLock(); }
+    }
     if (pedido.accion === 'lote') {
       const lock = LockService.getScriptLock();
       lock.waitLock(25000);
@@ -230,7 +238,12 @@ function verClave() {
 
 function validarClave_(clave) {
   const real = PropertiesService.getScriptProperties().getProperty(PROP_CLAVE);
-  if (!real) return 'La API no tiene clave. Ejecuta generarClave() en Apps Script.';
+  if (!real) { // primer uso: la clave que escribas en la app queda como la clave de la API
+    const c = String(clave || '');
+    if (c.length < 8) return 'La primera vez escribe una clave nueva de al menos 8 caracteres.';
+    PropertiesService.getScriptProperties().setProperty(PROP_CLAVE, c);
+    return true;
+  }
   const cache = CacheService.getScriptCache();
   const fallos = Number(cache.get('fallos') || 0);
   if (fallos >= MAX_INTENTOS) return 'Demasiados intentos fallidos. Espera 10 minutos.';
@@ -449,8 +462,10 @@ function aplicarLote_(ops) {
     if (!ESQUEMA[k]) throw new Error('Tabla desconocida: ' + k);
     if (!ctx[k]) {
       ctx[k] = abrir_(k);
-      if (!ctx[k].sh) throw new Error('Falta la pestaña "' + ESQUEMA[k].hoja + '". Ejecuta actualizarEstructura() en Apps Script.');
-      if (ctx[k].cols.id == null) throw new Error('La pestaña "' + ESQUEMA[k].hoja + '" no tiene columna ID. Ejecuta actualizarEstructura() en Apps Script.');
+      if (!ctx[k].sh) { estructura_(true, true); ctx[k] = abrir_(k); }
+      if (!ctx[k].sh) throw new Error('Falta la pestaña "' + ESQUEMA[k].hoja + '".');
+      if (ctx[k].cols.id == null) { estructura_(true, true); ctx[k] = abrir_(k); }
+      if (ctx[k].cols.id == null) throw new Error('La pestaña "' + ESQUEMA[k].hoja + '" no tiene columna ID.');
     }
     return ctx[k];
   };
@@ -551,9 +566,17 @@ function onOpen() {
 }
 
 function revisarEstructura() { return estructura_(false); }
+
+/** ¿Falta alguna pestaña o columna? (la API actualiza la hoja sola la primera vez) */
+function faltaEstructura_() {
+  return Object.keys(ESQUEMA).some(function (k) {
+    const t = abrir_(k);
+    return !t.sh || ESQUEMA[k].campos.some(function (c) { return t.cols[c.key] == null; });
+  });
+}
 function actualizarEstructura() { return estructura_(true); }
 
-function estructura_(aplicar) {
+function estructura_(aplicar, silencioso) {
   const ss = libro_(), tz = zona_(), log = [];
   log.push(aplicar ? 'ACTUALIZACIÓN DE ESTRUCTURA' : 'REVISIÓN DE ESTRUCTURA (no se cambió nada)');
 
@@ -608,7 +631,7 @@ function estructura_(aplicar) {
   else log.push('\nListo. Ahora ejecuta generarClave() si aún no tienes clave, y publica la API.');
   const txt = log.join('\n');
   Logger.log(txt);
-  avisar_(txt);
+  if (!silencioso) avisar_(txt);
   return txt;
 }
 

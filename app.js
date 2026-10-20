@@ -122,6 +122,7 @@ async function sincronizar() {
       S.faltantes = d.faltantes || {};
       S.calculadas = d.calculadas || {};
       S.ts = Date.now();
+      if (d.migracion) { LS.set('fm_migracion', d.migracion); toast('Tu hoja se actualizó: pestañas y columnas nuevas listas, sin borrar datos.', 6000); }
       guardarCache();
       elegirMes();
       setSync('ok');
@@ -606,6 +607,7 @@ function vAjustes() {
     <div class="sec-h"><h2>Conexión</h2><button class="link" data-act="conexion">Cambiar URL o clave</button></div>
     <div class="kv"><span>Hoja</span><span>${S.sync === 'err' ? 'Error' : S.api ? 'Conectada' : 'Sin conectar'}</span><span>API</span><span>…${esc(String(api.url || '').slice(-18))}</span><span>Última sincronización</span><span>${S.ts ? new Date(S.ts).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' }) : '—'}</span><span>Cambios por guardar</span><span>${S.outbox.length}</span></div>
     ${S.syncMsg && S.sync === 'err' ? `<div class="box" style="color:var(--crit)">${esc(S.syncMsg)}</div>` : ''}
+    ${LS.get('fm_migracion', '') ? `<details><summary>Qué cambió en tu hoja al conectarla</summary><pre class="box" style="white-space:pre-wrap;font-size:12px">${esc(LS.get('fm_migracion', ''))}</pre></details>` : ''}
     <div class="btns"><button class="btn sm" data-act="sincronizar">Sincronizar ahora</button>${S.install ? '<button class="btn sm pri" data-act="instalar">Instalar en este dispositivo</button>' : ''}<button class="btn sm dan" data-act="olvidar">Borrar datos de este dispositivo</button></div>
     ${S.install ? '' : '<p class="note">Para instalarla: en Android o Chrome usa “Instalar app” del menú; en iPhone, Compartir → “Agregar a inicio”.</p>'}
   </section>
@@ -658,9 +660,9 @@ function vSetup() {
     <div><h2 style="font-size:26px">Conecta tu hoja</h2><p class="note">La app lee y guarda en tu Google Sheet personal mediante tu API de Apps Script. La URL y la clave se quedan solo en este dispositivo.</p></div>
     <form class="card" id="setupForm" novalidate>
       ${fld('s_url', 'URL de la API (termina en /exec)', a.url || '', 'url', 'required placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off"')}
-      ${fld('s_key', 'Clave secreta', a.clave || '', 'password', 'required autocomplete="off"')}
+      ${fld('s_key', 'Clave secreta (la primera vez invéntala: mínimo 8 caracteres)', a.clave || '', 'password', 'required autocomplete="new-password" minlength="8"')}
       <div class="btns" style="justify-content:flex-end"><button class="btn pri">Conectar</button></div>
-      <ol><li>En la hoja: menú Finanzas Matt → Actualizar estructura.</li><li>Finanzas Matt → Generar clave nueva y cópiala.</li><li>Apps Script → Implementar → Aplicación web, acceso “Cualquier usuario”. Copia la URL.</li></ol>
+      <ol><li>Apps Script → Implementar → Nueva implementación → Aplicación web, acceso “Cualquier usuario”. Copia la URL.</li><li>Pégala aquí e inventa tu clave. La primera conexión guarda la clave y prepara tu hoja sola.</li><li>En tus otros dispositivos usa la misma URL y clave.</li></ol>
     </form></div>`;
 }
 
