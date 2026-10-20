@@ -854,7 +854,8 @@ function sheetPago(id) {
       <div class="diff good"><span>Pago cerrado${r.sobrante > 0 ? ' · sobrante a ahorro' : ''}</span><b>${fmt(r.sobrante)}</b></div>
       ${ah ? `<p class="note">${esc(ah.de)} → ${esc(ah.a)}${ah.meta ? ' · meta ' + esc(ah.meta) : ''}.</p>` : ''}
       <p class="note">Reabrir quita el registro de ahorro de este sobrante y deja el pago como pendiente.</p>
-      ${actions('Listo', '<button class="btn" value="reabrir" style="margin-right:auto">Reabrir pago</button>')}`, (fd, btn) => {
+      ${actions('Listo', `<div class="btns" style="margin-right:auto">${btnPorPagar(r)}<button class="btn" value="reabrir">Reabrir pago</button></div>`)}`, (fd, btn) => {
+      if (btn === 'porpagar') { closeSheet(); commit(opsPorPagar(r), 'Por pagar ' + r.nombre, r.nombre + ' vuelve a por pagar'); return; }
       if (btn === 'reabrir') { closeSheet(); commit([G('pagos', { id: r.id, cerrado: false, sobrante: 0 }), ah && DEL('ahorros', ah.id)], 'Reabrir ' + r.nombre, 'Pago reabierto'); return; }
       closeSheet();
     });
@@ -862,12 +863,14 @@ function sheetPago(id) {
     return;
   }
   const f = openSheet(`${head}
-    <div class="two">${fld('p_m', 'Monto de este pago', r.pend || '', 'number')}${fld('p_f', 'Fecha de pago', fechaDef(), 'date')}</div>
+    ${r.pag > 0 && r.pend === 0 ? '<div class="diff good"><span>Ya está pagado completo. Si lo marcaste por error usa “Marcar por pagar”.</span></div>' : ''}
+    <div class="two">${fld('p_m', r.pag > 0 && r.pend === 0 ? 'Agregar otro pago (opcional)' : 'Monto de este pago', r.pend || '', 'number')}${fld('p_f', 'Fecha de pago', fechaDef(), 'date')}</div>
     ${ctaSel('p_a', 'Pagado desde', r.cta)}
     ${tog('p_x', 'Cerrar el pago (gasté menos de lo presupuestado y no habrá más cargos)', false)}
     <div data-when="p_x" class="sub-box"><div class="diff info" id="p_sob"></div><div id="p_ahw">${ahorroBox('ps', r.cta)}</div></div>
     ${r.c && !r.unaVez ? tog('p_b', 'Usar el total pagado como monto base de los próximos meses', false) : ''}
-    ${actions('Guardar', '<button type="button" class="btn" data-act2="editar" style="margin-right:auto">Editar</button>')}`, fd => {
+    ${actions('Guardar', `<div class="btns" style="margin-right:auto">${btnPorPagar(r)}<button type="button" class="btn" data-act2="editar">Editar</button></div>`)}`, (fd, btn) => {
+    if (btn === 'porpagar') { closeSheet(); commit(opsPorPagar(r), 'Por pagar ' + r.nombre, r.nombre + ' vuelve a por pagar'); return; }
     const monto = num(fd.get('p_m')), cerrar = !!fd.get('p_x'), fecha = fd.get('p_f') || fechaDef();
     if (!(monto > 0) && !cerrar) { toast('Escribe el monto que pagaste o marca “Cerrar el pago”.'); return; }
     const mz = materializar(r); r = mz.r; const ops = mz.ops;
@@ -893,6 +896,12 @@ function sheetPago(id) {
   f.querySelector('[data-act2="editar"]').addEventListener('click', () => sheetLinea(r.id));
   bindMetaCuenta(f, 'ps'); bindDelMov(f, r);
 }
+// Deshace el pago completo: borra sus movimientos y su ahorro ligado, y lo deja por pagar.
+function opsPorPagar(r) {
+  const ah = ahorroDe(r.id, 'Pago');
+  return [...r.movs.map(m => DEL('movimientos', m.id)), r.p && r.p._virtual ? null : G('pagos', { id: r.id, pagado: 0, fechaPago: '', cerrado: false, sobrante: 0 }), ah && DEL('ahorros', ah.id)];
+}
+const btnPorPagar = r => r.pag > 0 || r.cerrado ? '<button class="btn dan" value="porpagar">Marcar por pagar</button>' : '';
 function bindDelMov(f, r) {
   f.querySelectorAll('[data-delmov]').forEach(b => b.addEventListener('click', () => {
     const m = r.movs.find(x => x.id === b.dataset.delmov); if (!m) return;
