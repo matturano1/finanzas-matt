@@ -262,7 +262,9 @@ function abrir_(key) {
   const ancho = sh.getLastColumn();
   t.ancho = ancho;
   if (!ancho) return t;
-  const titulos = sh.getRange(FILA_TITULOS, 1, 1, ancho).getValues()[0].map(normal_);
+  const crudos = sh.getRange(FILA_TITULOS, 1, 1, ancho).getDisplayValues()[0];
+  t.titulos = crudos;
+  const titulos = crudos.map(normal_);
   const f2 = sh.getRange(FILA_TITULOS, 1, 1, ancho).getFormulas()[0];
   const f3 = sh.getMaxRows() >= FILA_DATOS ? sh.getRange(FILA_DATOS, 1, 1, ancho).getFormulas()[0] : [];
   const usado = {};
@@ -565,7 +567,7 @@ function estructura_(aplicar) {
     }
     const faltan = def.campos.filter(function (c) { return t.cols[c.key] == null; });
     const mapeo = def.campos.filter(function (c) { return t.cols[c.key] != null; }).map(function (c) {
-      const titulo = t.sh.getRange(FILA_TITULOS, t.cols[c.key] + 1).getDisplayValue();
+      const titulo = t.titulos[t.cols[c.key]];
       return normal_(titulo) === normal_(c.titulo) ? null : '"' + titulo + '" se usa como "' + c.titulo + '"';
     }).filter(Boolean);
     if (mapeo.length) log.push('• ' + def.hoja + ': ' + mapeo.join(' · '));
@@ -690,7 +692,14 @@ function formatoColumnas_(t) {
 }
 
 function avisar_(txt) {
-  try { SpreadsheetApp.getUi().alert(txt); } catch (e) { /* ejecutado desde el editor: queda en el registro */ }
+  // Ventana no bloqueante: la ejecución termina aunque nadie la cierre.
+  try {
+    const html = HtmlService.createHtmlOutput('<pre style="white-space:pre-wrap;font:13px/1.45 monospace">' +
+      String(txt).replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</pre>').setWidth(640).setHeight(520);
+    SpreadsheetApp.getUi().showModelessDialog(html, 'Finanzas Matt');
+  } catch (e) {
+    try { libro_().toast('Listo. Revisa el registro de ejecución en Apps Script.', 'Finanzas Matt', 8); } catch (e2) {}
+  }
 }
 
 function esFecha_(x) { return Object.prototype.toString.call(x) === '[object Date]' && !isNaN(x.getTime()); }
