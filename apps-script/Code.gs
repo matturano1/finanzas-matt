@@ -15,7 +15,7 @@
  * para abrir sin internet.
  */
 
-const VERSION_API = '2026.10.22';
+const VERSION_API = '2026.10.23';
 const PROP_CLAVE = 'CLAVE_API';
 const FILA_GRUPOS = 1;
 const FILA_TITULOS = 2;
@@ -200,6 +200,7 @@ function doPost(e) {
       try {
         repararMatrices_();
         rellenarFormulas_();
+        repararConceptos_();
         const migracion = faltaEstructura_() ? estructura_(true, true) : '';
         const rep = REPARADAS_;
         const datos = leerTodo_();
@@ -211,7 +212,7 @@ function doPost(e) {
     if (pedido.accion === 'lote') {
       const lock = LockService.getScriptLock();
       lock.waitLock(25000);
-      try { repararMatrices_(); const r = aplicarLote_(pedido.ops || []); return json_({ ok: true, aplicadas: r }); }
+      try { repararMatrices_(); repararConceptos_(); const r = aplicarLote_(pedido.ops || []); return json_({ ok: true, aplicadas: r }); }
       finally { lock.releaseLock(); }
     }
     return json_({ ok: false, error: 'Acción desconocida.' });
@@ -587,6 +588,7 @@ function guardar_(t, fila) {
     i = j + 1;
   }
   if (nueva) copiarFormulas_(t, r.fila);
+  if (nueva && t.key === 'conceptos' && !fila.__interno) completarIdConcepto_(t, r.fila);
 }
 
 /** Fórmulas de fila (p. ej. Monto comprometido, Pendiente por pagar): una fila nueva las copia de la fila de arriba. */
@@ -625,25 +627,79 @@ function rellenarFormulas_() {
   } catch (e) { /* no es crítico */ }
 }
 
+/** Columna donde la hoja guarda el identificador real del concepto (la misma que usa Pagos del mes en su columna B). */
+function colIdConcepto_(c, p) {
+  if (!c.sh || !c.titulos) return -1;
+  const tit = c.titulos.map(normal_);
+  let i = -1;
+  if (p && p.cols.conceptoId != null) i = tit.indexOf(normal_(p.titulos[p.cols.conceptoId]));
+  if (i < 0) i = tit.findIndex(function (x) { return x.indexOf('identificador') >= 0; });
+  if (i < 0) i = c.cols.id != null ? c.cols.id : -1;
+  return i;
+}
+function siguienteIdConcepto_(c, ci) {
+  let max = 0, hay = 0;
+  c.filas.forEach(function (r) { const m = String(r.v[ci] || '').match(/^C(\d+)$/); if (m) { hay++; max = Math.max(max, parseInt(m[1], 10)); } });
+  return hay ? 'C' + ('000' + (max + 1)).slice(-Math.max(3, String(max + 1).length)) : '';
+}
+/** Conceptos creados sin identificador real (por versiones anteriores): se les asigna y se corrigen los pagos que los usan. */
+function repararConceptos_() {
+  try {
+    const c = abrir_('conceptos'), p = abrir_('pagos');
+    if (!c.sh || !p.sh || p.cols.conceptoId == null) return;
+    const ci = colIdConcepto_(c, p);
+    if (ci < 0) return;
+    const cambios = {};
+    c.filas.forEach(function (r) {
+      if (String(r.v[ci] || '') !== '') return;
+      const viejo = c.cols.id != null && c.cols.id !== ci ? String(r.v[c.cols.id] || '') : '';
+      if (c.cols.nombre == null || !r.v[c.cols.nombre]) return;
+      const nuevo = siguienteIdConcepto_(c, ci);
+      if (!nuevo) return;
+      c.sh.getRange(r.fila, ci + 1).setValue(nuevo);
+      r.v[ci] = nuevo;
+      if (viejo) cambios[viejo] = nuevo;
+    });
+    Object.keys(cambios).length && p.filas.forEach(function (r) {
+      const v = String(r.v[p.cols.conceptoId] || '');
+      if (cambios[v]) p.sh.getRange(r.fila, p.cols.conceptoId + 1).setValue(cambios[v]);
+    });
+  } catch (e) { /* no es crítico */ }
+}
+
+function completarIdConcepto_(t, fila) {
+  try {
+    const ci = colIdConcepto_(t, null);
+    if (ci < 0 || ci === t.cols.id) return;
+    const cel = t.sh.getRange(fila, ci + 1);
+    if (String(cel.getValue() || '') !== '' || cel.getFormula()) return;
+    const c = abrir_('conceptos');
+    const id = siguienteIdConcepto_(c, ci);
+    if (id) cel.setValue(id);
+  } catch (e) { /* no es crítico */ }
+}
+
 /** Un gasto nuevo debe colgar de un concepto de la hoja: así las fórmulas de nombre y categoría lo llenan solas. */
 function asegurarConcepto_(t, fila) {
   if (t.cols.conceptoId == null || fila.conceptoId || !fila.concepto) return;
   const c = abrir_('conceptos');
-  if (!c.sh || c.cols.id == null || c.cols.nombre == null || c.calc.id || c.calc.nombre) return;
+  if (!c.sh || c.cols.nombre == null || c.calc.nombre) return;
+  const ci = colIdConcepto_(c, t);
+  if (ci < 0) return;
   const n = normal_(fila.concepto);
-  let id = '', maxN = 0, hayC = 0;
-  c.filas.forEach(function (r) {
-    const rid = String(r.v[c.cols.id] || '');
-    const m = rid.match(/^C(\d+)$/);
-    if (m) { hayC++; maxN = Math.max(maxN, parseInt(m[1], 10)); }
-    if (!id && normal_(r.v[c.cols.nombre]) === n && rid) id = rid;
-  });
-  if (!id) {
-    id = hayC ? 'C' + ('000' + (maxN + 1)).slice(-Math.max(3, String(maxN + 1).length)) : 'x' + Utilities.getUuid().slice(0, 8);
-    guardar_(c, { id: id, nombre: fila.concepto, categoria: fila.categoria || '', tipo: fila.tipo || 'Extra', forma: fila.forma || '', cuenta: fila.cuenta || '',
-      frecuencia: 'Ocasional', monto: Number(fila.plan) || 0, variable: false, suscripcion: false, negocio: false, activo: false });
-  }
-  fila.conceptoId = id;
+  const ex = c.filas.find(function (r) { return normal_(r.v[c.cols.nombre]) === n && String(r.v[ci] || '') !== ''; });
+  if (ex) { fila.conceptoId = String(ex.v[ci]); return; }
+  const id = siguienteIdConcepto_(c, ci);
+  if (!id) return; // no se reconoce el formato de identificadores: el nombre va a la columna libre
+  const nueva = { id: 'x' + Utilities.getUuid().slice(0, 8), nombre: fila.concepto, categoria: fila.categoria || '', tipo: fila.tipo || 'Extra', forma: fila.forma || '', cuenta: fila.cuenta || '',
+    frecuencia: 'Ocasional', monto: Number(fila.plan) || 0, variable: false, suscripcion: false, negocio: false, activo: false };
+  guardar_(c, nueva);
+  const r2 = buscarFila_(c, nueva.id);
+  if (r2 && ci !== c.cols.id) {
+    const cel = c.sh.getRange(r2.fila, ci + 1);
+    if (String(cel.getValue() || '') === '' && !cel.getFormula()) cel.setValue(id);
+    fila.conceptoId = String(cel.getValue() || id);
+  } else fila.conceptoId = nueva.id;
 }
 
 function eliminar_(t, id) {
