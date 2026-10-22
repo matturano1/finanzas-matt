@@ -15,7 +15,7 @@
  * para abrir sin internet.
  */
 
-const VERSION_API = '2026.10.19';
+const VERSION_API = '2026.10.21';
 const PROP_CLAVE = 'CLAVE_API';
 const FILA_GRUPOS = 1;
 const FILA_TITULOS = 2;
@@ -199,8 +199,10 @@ function doPost(e) {
       try {
         repararMatrices_();
         const migracion = faltaEstructura_() ? estructura_(true, true) : '';
+        const rep = REPARADAS_;
         const datos = leerTodo_();
         datos.migracion = migracion;
+        datos.reparadas = rep;
         return json_({ ok: true, version: VERSION_API, datos: datos });
       } finally { lock.releaseLock(); }
     }
@@ -324,7 +326,9 @@ function abrir_(key) {
 
 /** Si una fórmula de matriz de la fila de títulos (p. ej. Concepto/Categoría) quedó bloqueada por celdas escritas debajo,
  *  limpia esas celdas para que la fórmula vuelva a llenarse sola, y quita columnas duplicadas vacías que nacieron por el error. */
+let REPARADAS_ = 0;
 function repararMatrices_() {
+  REPARADAS_ = 0;
   const ss = libro_();
   Object.keys(ESQUEMA).forEach(function (k) {
     const sh = ss.getSheetByName(ESQUEMA[k].hoja);
@@ -340,7 +344,7 @@ function repararMatrices_() {
         const rg = sh.getRange(FILA_DATOS, i + 1, last - FILA_DATOS + 1, 1);
         const vals = rg.getValues(), fs = rg.getFormulas();
         vals.forEach(function (x, n) {
-          if (x[0] !== '' && x[0] !== null && !fs[n][0]) { sh.getRange(FILA_DATOS + n, i + 1).clearContent(); tocado = true; }
+          if (x[0] !== '' && x[0] !== null && !fs[n][0]) { sh.getRange(FILA_DATOS + n, i + 1).clearContent(); tocado = true; REPARADAS_++; }
         });
       }
     }

@@ -109,6 +109,7 @@ async function flush() {
 
 let syncTimer = null, syncing = null;
 function syncPronto(ms) { clearTimeout(syncTimer); syncTimer = setTimeout(sincronizar, ms ?? 400); }
+const API_ESPERADA = '2026.10.21';
 async function sincronizar() {
   if (!S.api) return;
   if (syncing) return syncing;
@@ -124,7 +125,9 @@ async function sincronizar() {
       S.cfg = d.config || {};
       S.faltantes = d.faltantes || {};
       S.calculadas = d.calculadas || {};
-      S.ts = Date.now();
+      S.ts = Date.now(); S.apiVersion = j.version || '';
+      if (S.apiVersion < API_ESPERADA) toast('Tu API de Google es una versión vieja (' + (S.apiVersion || 'sin versión') + '). En Apps Script: Implementar → Administrar implementaciones → lápiz → Nueva versión.', 9000);
+      if (d.reparadas) toast('Hoja reparada: ' + d.reparadas + ' celda(s) que bloqueaban las fórmulas de nombre y categoría.', 7000);
       if (d.migracion) { LS.set('fm_migracion', d.migracion); toast('Tu hoja se actualizó: pestañas y columnas nuevas listas, sin borrar datos.', 6000); }
       guardarCache();
       elegirMes();
@@ -608,7 +611,7 @@ function vAjustes() {
   ${avisoEstructura()}
   <section class="card">
     <div class="sec-h"><h2>Conexión</h2><button class="link" data-act="conexion">Cambiar URL o clave</button></div>
-    <div class="kv"><span>Hoja</span><span>${S.sync === 'err' ? 'Error' : S.api ? 'Conectada' : 'Sin conectar'}</span><span>API</span><span>…${esc(String(api.url || '').slice(-18))}</span><span>Última sincronización</span><span>${S.ts ? new Date(S.ts).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' }) : '—'}</span><span>Cambios por guardar</span><span>${S.outbox.length}</span></div>
+    <div class="kv"><span>Hoja</span><span>${S.sync === 'err' ? 'Error' : S.api ? 'Conectada' : 'Sin conectar'}</span><span>API</span><span>…${esc(String(api.url || '').slice(-18))}</span><span>Última sincronización</span><span>${S.ts ? new Date(S.ts).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' }) : '—'}</span><span>Versión de la API</span><span>${esc(S.apiVersion || '—')}${S.apiVersion && S.apiVersion < API_ESPERADA ? ' · vieja: publica nueva versión' : ''}</span><span>Cambios por guardar</span><span>${S.outbox.length}</span></div>
     ${S.syncMsg && S.sync === 'err' ? `<div class="box" style="color:var(--crit)">${esc(S.syncMsg)}</div>` : ''}
     ${LS.get('fm_migracion', '') ? `<details><summary>Qué cambió en tu hoja al conectarla</summary><pre class="box" style="white-space:pre-wrap;font-size:12px">${esc(LS.get('fm_migracion', ''))}</pre></details>` : ''}
     <div class="btns"><button class="btn sm" data-act="sincronizar">Sincronizar ahora</button>${S.install ? '<button class="btn sm pri" data-act="instalar">Instalar en este dispositivo</button>' : ''}<button class="btn sm dan" data-act="olvidar">Borrar datos de este dispositivo</button></div>
