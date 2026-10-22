@@ -26,7 +26,7 @@ const MAX_INTENTOS = 20;
 /* Estructura esperada: nombre interno, título de columna, tipo, grupo  */
 /* y sinónimos que se aceptan si la columna ya existe con otro nombre.  */
 /* ------------------------------------------------------------------ */
-function f_(key, titulo, tipo, grupo, alias) { return { key: key, titulo: titulo, tipo: tipo, grupo: grupo, alias: alias || [] }; }
+function f_(key, titulo, tipo, grupo, alias, libre) { return { key: key, titulo: titulo, tipo: tipo, grupo: grupo, alias: alias || [], libre: libre || '' }; }
 
 const ESQUEMA = {
   cuentas: { hoja: 'Cuentas', campos: [
@@ -75,8 +75,8 @@ const ESQUEMA = {
   ]},
   pagos: { hoja: 'Pagos del mes', campos: [
     f_('mes', 'Mes', 'mes', 'Pago', []),
-    f_('concepto', 'Concepto', 'texto', 'Pago', ['Nombre']),
-    f_('categoria', 'Categoría', 'texto', 'Pago', ['Categoria']),
+    f_('concepto', 'Concepto', 'texto', 'Pago', ['Nombre'], 'conceptoLibre'),
+    f_('categoria', 'Categoría', 'texto', 'Pago', ['Categoria'], 'categoriaLibre'),
     f_('tipo', 'Tipo de gasto', 'texto', 'Pago', ['Tipo']),
     f_('forma', 'Forma de pago', 'texto', 'Pago', ['Forma']),
     f_('cuenta', 'Cuenta de pago', 'texto', 'Pago', ['Cuenta', 'Pagado desde', 'Se paga desde']),
@@ -87,6 +87,8 @@ const ESQUEMA = {
     f_('cerrado', 'Cerrado', 'bool', 'Cierre', ['Pago cerrado']),
     f_('sobrante', 'Sobrante', 'num', 'Cierre', ['Sobrante a ahorro']),
     f_('unaVez', 'Solo este mes', 'bool', 'Cierre', ['Una sola vez', 'Gasto de una sola vez']),
+    f_('conceptoLibre', 'Nombre del gasto (libre)', 'texto', 'Gasto libre', []),
+    f_('categoriaLibre', 'Categoría del gasto (libre)', 'texto', 'Gasto libre', []),
     f_('id', 'ID', 'texto', 'Control', ['Id', 'Identificador'])
   ]},
   movimientos: { hoja: 'Movimientos', campos: [
@@ -195,6 +197,7 @@ function doPost(e) {
       const lock = LockService.getScriptLock();
       lock.waitLock(25000);
       try {
+        repararMatrices_();
         const migracion = faltaEstructura_() ? estructura_(true, true) : '';
         const datos = leerTodo_();
         datos.migracion = migracion;
@@ -204,7 +207,7 @@ function doPost(e) {
     if (pedido.accion === 'lote') {
       const lock = LockService.getScriptLock();
       lock.waitLock(25000);
-      try { AVISOS_ = []; const r = aplicarLote_(pedido.ops || []); return json_({ ok: true, aplicadas: r, avisos: AVISOS_ }); }
+      try { repararMatrices_(); const r = aplicarLote_(pedido.ops || []); return json_({ ok: true, aplicadas: r }); }
       finally { lock.releaseLock(); }
     }
     return json_({ ok: false, error: 'Acción desconocida.' });
@@ -319,6 +322,41 @@ function abrir_(key) {
   return t;
 }
 
+/** Si una fórmula de matriz de la fila de títulos (p. ej. Concepto/Categoría) quedó bloqueada por celdas escritas debajo,
+ *  limpia esas celdas para que la fórmula vuelva a llenarse sola, y quita columnas duplicadas vacías que nacieron por el error. */
+function repararMatrices_() {
+  const ss = libro_();
+  Object.keys(ESQUEMA).forEach(function (k) {
+    const sh = ss.getSheetByName(ESQUEMA[k].hoja);
+    if (!sh) return;
+    const ancho = sh.getLastColumn(), last = sh.getLastRow();
+    if (!ancho) return;
+    const f2 = sh.getRange(FILA_TITULOS, 1, 1, ancho).getFormulas()[0];
+    const v2 = sh.getRange(FILA_TITULOS, 1, 1, ancho).getDisplayValues()[0];
+    let tocado = false;
+    for (let i = 0; i < ancho; i++) {
+      if (!f2[i] || String(v2[i]).charAt(0) !== '#') continue;
+      if (last >= FILA_DATOS) {
+        const rg = sh.getRange(FILA_DATOS, i + 1, last - FILA_DATOS + 1, 1);
+        const vals = rg.getValues(), fs = rg.getFormulas();
+        vals.forEach(function (x, n) {
+          if (x[0] !== '' && x[0] !== null && !fs[n][0]) { sh.getRange(FILA_DATOS + n, i + 1).clearContent(); tocado = true; }
+        });
+      }
+    }
+    if (!tocado) return;
+    SpreadsheetApp.flush();
+    // Columnas repetidas y vacías al final (las agregó la actualización mientras el título estaba en error).
+    const t2 = sh.getRange(FILA_TITULOS, 1, 1, ancho).getDisplayValues()[0].map(normal_);
+    for (let i = ancho - 1; i > 0; i--) {
+      if (!t2[i] || t2.indexOf(t2[i]) === i) continue;
+      const lastR = sh.getLastRow();
+      const llena = lastR >= FILA_DATOS && sh.getRange(FILA_DATOS, i + 1, lastR - FILA_DATOS + 1, 1).getValues().some(function (x) { return x[0] !== '' && x[0] !== null; });
+      if (!llena && i === sh.getLastColumn() - 1) sh.deleteColumns(i + 1, 1);
+    }
+  });
+}
+
 function leerVal_(x, tipo, tz) {
   if (x === '' || x === null || x === undefined) return (tipo === 'bool' || tipo === 'num' || tipo === 'entero') ? null : '';
   switch (tipo) {
@@ -371,6 +409,7 @@ function filaObj_(t, r, tz) {
     if (t.cols[c.key] == null) return;
     o[c.key] = leerVal_(r.v[t.cols[c.key]], c.tipo, tz);
   });
+  t.def.campos.forEach(function (c) { if (c.libre && !o[c.key] && o[c.libre]) o[c.key] = o[c.libre]; });
   if (!o.id) o.id = 'fila' + r.fila; // sin columna ID todavía: identificador temporal
   return o;
 }
@@ -457,7 +496,6 @@ function escribirConfig_(k, valor) {
 /*   {op:'reemplazar', tabla, campo, de, a}  renombra en toda la columna */
 /*   {op:'config', clave, valor}                                        */
 /* ------------------------------------------------------------------ */
-let AVISOS_ = [];
 function aplicarLote_(ops) {
   const ctx = {};
   const tabla = function (k) {
@@ -467,6 +505,8 @@ function aplicarLote_(ops) {
       if (!ctx[k].sh) { estructura_(true, true); ctx[k] = abrir_(k); }
       if (!ctx[k].sh) throw new Error('Falta la pestaña "' + ESQUEMA[k].hoja + '".');
       if (ctx[k].cols.id == null) { estructura_(true, true); ctx[k] = abrir_(k); }
+      const sinLibre = ESQUEMA[k].campos.some(function (c) { return c.libre && ctx[k].calc[c.key] && ctx[k].cols[c.libre] == null; });
+      if (sinLibre) { estructura_(true, true); ctx[k] = abrir_(k); }
       if (ctx[k].cols.id == null) throw new Error('La pestaña "' + ESQUEMA[k].hoja + '" no tiene columna ID.');
     }
     return ctx[k];
@@ -517,22 +557,13 @@ function guardar_(t, fila) {
     t.ultima = num;
   }
   const celdas = [];
-  // Columna con fórmula (p. ej. Concepto o Categoría que se buscan solas): en una fila NUEVA la celda está vacía,
-  // así que se escribe el valor para no dejar el gasto sin nombre. Si la fórmula es de matriz (ARRAYFORMULA)
-  // o la celda ya tiene fórmula, se respeta y se avisa.
-  const libre = {};
-  if (nueva) {
-    const fs = t.sh.getRange(r.fila, 1, 1, t.ancho).getFormulas()[0];
-    Object.keys(t.calc).forEach(function (k) {
-      const i = t.cols[k];
-      if (k === 'id' || !fila[k] && fila[k] !== 0) return;
-      const fm = String(t.formulaTitulo && t.formulaTitulo[k] || '');
-      if (!fs[i] && !/arrayformula|query\(|filter\(|sort\(|unique\(|\{/i.test(fm)) libre[k] = true;
-      else AVISOS_.push(t.def.hoja + ': “' + titulo_(t.def, k) + '” tiene fórmula y no se pudo escribir "' + fila[k] + '".');
-    });
-  }
+  // Columna calculada por fórmula (p. ej. Concepto/Categoría que se buscan por identificador): la app no la toca;
+  // el nombre y la categoría de un gasto propio van a su columna "(libre)".
   t.def.campos.forEach(function (c) {
-    if (!(c.key in fila) || t.cols[c.key] == null || (t.calc[c.key] && !libre[c.key])) return;
+    if (c.libre && t.calc[c.key] && c.key in fila && t.cols[c.libre] != null) fila[c.libre] = fila[c.key];
+  });
+  t.def.campos.forEach(function (c) {
+    if (!(c.key in fila) || t.cols[c.key] == null || t.calc[c.key]) return;
     const v = valorEscribir_(t, c, fila[c.key], tz);
     celdas.push({ col: t.cols[c.key], v: v, tipo: c.tipo });
     r.v[t.cols[c.key]] = v;
@@ -560,11 +591,14 @@ function eliminar_(t, id) {
 }
 
 function reemplazar_(t, campo, de, a) {
-  const ci = t.cols[campo];
-  if (ci == null || t.calc[campo]) return;
   const n = normal_(de);
-  t.filas.forEach(function (r) {
-    if (normal_(r.v[ci]) === n) t.sh.getRange(r.fila, ci + 1).setValue(a);
+  const def = t.def.campos.find(function (c) { return c.key === campo; });
+  [campo, def && def.libre].forEach(function (k) {
+    const ci = k ? t.cols[k] : null;
+    if (ci == null || t.calc[k]) return;
+    t.filas.forEach(function (r) {
+      if (normal_(r.v[ci]) === n) t.sh.getRange(r.fila, ci + 1).setValue(a);
+    });
   });
 }
 
