@@ -91,7 +91,10 @@ async function flush() {
   try {
     while (S.outbox.length) {
       const b = S.outbox[0];
-      try { await api('lote', { ops: b.ops }); }
+      try {
+        const j = await api('lote', { ops: b.ops });
+        if (j.avisos && j.avisos.length) toast('Ojo con la hoja: ' + j.avisos[0], 8000);
+      }
       catch (e) {
         if (e.red) { setSync('off'); return false; }
         S.outbox.shift(); guardarOutbox();

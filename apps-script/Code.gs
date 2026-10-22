@@ -204,7 +204,7 @@ function doPost(e) {
     if (pedido.accion === 'lote') {
       const lock = LockService.getScriptLock();
       lock.waitLock(25000);
-      try { const r = aplicarLote_(pedido.ops || []); return json_({ ok: true, aplicadas: r }); }
+      try { AVISOS_ = []; const r = aplicarLote_(pedido.ops || []); return json_({ ok: true, aplicadas: r, avisos: AVISOS_ }); }
       finally { lock.releaseLock(); }
     }
     return json_({ ok: false, error: 'Acción desconocida.' });
@@ -292,9 +292,10 @@ function abrir_(key) {
       if (i >= 0 && !usado[i]) { t.cols[c.key] = i; usado[i] = true; return; }
     }
   });
+  t.formulaTitulo = {};
   Object.keys(t.cols).forEach(function (k) {
     const i = t.cols[k];
-    if (f2[i] || f3[i]) t.calc[k] = true;
+    if (f2[i] || f3[i]) { t.calc[k] = true; t.formulaTitulo[k] = f3[i] || f2[i]; }
   });
   // Casillas de verificación: se escriben como verdadero/falso en lugar de Sí/No.
   if (sh.getMaxRows() >= FILA_DATOS) {
@@ -456,6 +457,7 @@ function escribirConfig_(k, valor) {
 /*   {op:'reemplazar', tabla, campo, de, a}  renombra en toda la columna */
 /*   {op:'config', clave, valor}                                        */
 /* ------------------------------------------------------------------ */
+let AVISOS_ = [];
 function aplicarLote_(ops) {
   const ctx = {};
   const tabla = function (k) {
@@ -515,8 +517,22 @@ function guardar_(t, fila) {
     t.ultima = num;
   }
   const celdas = [];
+  // Columna con fórmula (p. ej. Concepto o Categoría que se buscan solas): en una fila NUEVA la celda está vacía,
+  // así que se escribe el valor para no dejar el gasto sin nombre. Si la fórmula es de matriz (ARRAYFORMULA)
+  // o la celda ya tiene fórmula, se respeta y se avisa.
+  const libre = {};
+  if (nueva) {
+    const fs = t.sh.getRange(r.fila, 1, 1, t.ancho).getFormulas()[0];
+    Object.keys(t.calc).forEach(function (k) {
+      const i = t.cols[k];
+      if (k === 'id' || !fila[k] && fila[k] !== 0) return;
+      const fm = String(t.formulaTitulo && t.formulaTitulo[k] || '');
+      if (!fs[i] && !/arrayformula|query\(|filter\(|sort\(|unique\(|\{/i.test(fm)) libre[k] = true;
+      else AVISOS_.push(t.def.hoja + ': “' + titulo_(t.def, k) + '” tiene fórmula y no se pudo escribir "' + fila[k] + '".');
+    });
+  }
   t.def.campos.forEach(function (c) {
-    if (!(c.key in fila) || t.cols[c.key] == null || t.calc[c.key]) return;
+    if (!(c.key in fila) || t.cols[c.key] == null || (t.calc[c.key] && !libre[c.key])) return;
     const v = valorEscribir_(t, c, fila[c.key], tz);
     celdas.push({ col: t.cols[c.key], v: v, tipo: c.tipo });
     r.v[t.cols[c.key]] = v;
