@@ -15,7 +15,7 @@
  * para abrir sin internet.
  */
 
-const VERSION_API = '2026.10.21';
+const VERSION_API = '2026.10.22';
 const PROP_CLAVE = 'CLAVE_API';
 const FILA_GRUPOS = 1;
 const FILA_TITULOS = 2;
@@ -63,7 +63,7 @@ const ESQUEMA = {
     f_('suscripcion', 'Suscripción', 'bool', 'Clasificación', ['Suscripcion', 'Es suscripción']),
     f_('negocio', 'Gasto de negocio', 'bool', 'Clasificación', ['Negocio', 'Es negocio', 'Es gasto de negocio']),
     f_('activo', 'Activo', 'bool', 'Clasificación', ['Activa', 'Estado']),
-    f_('id', 'ID', 'texto', 'Control', ['Id', 'Identificador'])
+    f_('id', 'ID', 'texto', 'Control', ['Id', 'Identificador', 'Identificador del concepto', 'ID del concepto'])
   ]},
   historial: { hoja: 'Historial de montos', campos: [
     f_('fecha', 'Fecha', 'fecha', 'Cambio', ['Fecha del cambio']),
@@ -75,6 +75,7 @@ const ESQUEMA = {
   ]},
   pagos: { hoja: 'Pagos del mes', campos: [
     f_('mes', 'Mes', 'mes', 'Pago', []),
+    f_('conceptoId', 'Identificador del concepto', 'texto', 'Pago', ['ID del concepto', 'Id concepto', 'Concepto ID']),
     f_('concepto', 'Concepto', 'texto', 'Pago', ['Nombre'], 'conceptoLibre'),
     f_('categoria', 'Categoría', 'texto', 'Pago', ['Categoria'], 'categoriaLibre'),
     f_('tipo', 'Tipo de gasto', 'texto', 'Pago', ['Tipo']),
@@ -198,6 +199,7 @@ function doPost(e) {
       lock.waitLock(25000);
       try {
         repararMatrices_();
+        rellenarFormulas_();
         const migracion = faltaEstructura_() ? estructura_(true, true) : '';
         const rep = REPARADAS_;
         const datos = leerTodo_();
@@ -560,11 +562,12 @@ function guardar_(t, fila) {
     t.filas.push(r);
     t.ultima = num;
   }
+  if (nueva && t.key === 'pagos') asegurarConcepto_(t, fila);
   const celdas = [];
   // Columna calculada por fórmula (p. ej. Concepto/Categoría que se buscan por identificador): la app no la toca;
   // el nombre y la categoría de un gasto propio van a su columna "(libre)".
   t.def.campos.forEach(function (c) {
-    if (c.libre && t.calc[c.key] && c.key in fila && t.cols[c.libre] != null) fila[c.libre] = fila[c.key];
+    if (c.libre && t.calc[c.key] && c.key in fila && t.cols[c.libre] != null && !fila.conceptoId) fila[c.libre] = fila[c.key];
   });
   t.def.campos.forEach(function (c) {
     if (!(c.key in fila) || t.cols[c.key] == null || t.calc[c.key]) return;
@@ -583,6 +586,64 @@ function guardar_(t, fila) {
     if (nueva) rango.setNumberFormats([tramo.map(function (x) { return FORMATO_[x.tipo] || '@'; })]);
     i = j + 1;
   }
+  if (nueva) copiarFormulas_(t, r.fila);
+}
+
+/** Fórmulas de fila (p. ej. Monto comprometido, Pendiente por pagar): una fila nueva las copia de la fila de arriba. */
+function columnasConFormulaPorFila_(t) {
+  const out = {};
+  const ult = t.ultima;
+  if (ult < FILA_DATOS || !t.ancho) return out;
+  const fr = t.sh.getRange(FILA_DATOS, 1, ult - FILA_DATOS + 1, t.ancho).getFormulasR1C1();
+  for (let i = 0; i < t.ancho; i++) {
+    let n = 0, ultima = '';
+    fr.forEach(function (row) { if (row[i]) { n++; ultima = row[i]; } });
+    if (n >= 2) out[i] = { i: i, formula: ultima, filas: fr.map(function (row) { return !!row[i]; }) };
+  }
+  return out;
+}
+function copiarFormulas_(t, fila) {
+  try {
+    const cols = columnasConFormulaPorFila_({ sh: t.sh, ancho: t.ancho, ultima: fila - 1 });
+    Object.keys(cols).forEach(function (k) { t.sh.getRange(fila, cols[k].i + 1).setFormulaR1C1(cols[k].formula); });
+  } catch (e) { /* si la hoja no lo permite, la fila queda sin esas fórmulas */ }
+}
+/** Rellena las fórmulas de fila que faltan en filas que ya tienen datos. */
+function rellenarFormulas_() {
+  try {
+    const t = abrir_('pagos');
+    if (!t.sh) return;
+    const cols = columnasConFormulaPorFila_(t);
+    Object.keys(cols).forEach(function (k) {
+      const c = cols[k];
+      t.filas.forEach(function (r) {
+        const idx = r.fila - FILA_DATOS;
+        if (c.filas[idx] || r.v[c.i] !== '') return;
+        t.sh.getRange(r.fila, c.i + 1).setFormulaR1C1(c.formula);
+      });
+    });
+  } catch (e) { /* no es crítico */ }
+}
+
+/** Un gasto nuevo debe colgar de un concepto de la hoja: así las fórmulas de nombre y categoría lo llenan solas. */
+function asegurarConcepto_(t, fila) {
+  if (t.cols.conceptoId == null || fila.conceptoId || !fila.concepto) return;
+  const c = abrir_('conceptos');
+  if (!c.sh || c.cols.id == null || c.cols.nombre == null || c.calc.id || c.calc.nombre) return;
+  const n = normal_(fila.concepto);
+  let id = '', maxN = 0, hayC = 0;
+  c.filas.forEach(function (r) {
+    const rid = String(r.v[c.cols.id] || '');
+    const m = rid.match(/^C(\d+)$/);
+    if (m) { hayC++; maxN = Math.max(maxN, parseInt(m[1], 10)); }
+    if (!id && normal_(r.v[c.cols.nombre]) === n && rid) id = rid;
+  });
+  if (!id) {
+    id = hayC ? 'C' + ('000' + (maxN + 1)).slice(-Math.max(3, String(maxN + 1).length)) : 'x' + Utilities.getUuid().slice(0, 8);
+    guardar_(c, { id: id, nombre: fila.concepto, categoria: fila.categoria || '', tipo: fila.tipo || 'Extra', forma: fila.forma || '', cuenta: fila.cuenta || '',
+      frecuencia: 'Ocasional', monto: Number(fila.plan) || 0, variable: false, suscripcion: false, negocio: false, activo: false });
+  }
+  fila.conceptoId = id;
 }
 
 function eliminar_(t, id) {

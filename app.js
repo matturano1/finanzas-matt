@@ -109,7 +109,7 @@ async function flush() {
 
 let syncTimer = null, syncing = null;
 function syncPronto(ms) { clearTimeout(syncTimer); syncTimer = setTimeout(sincronizar, ms ?? 400); }
-const API_ESPERADA = '2026.10.21';
+const API_ESPERADA = '2026.10.22';
 async function sincronizar() {
   if (!S.api) return;
   if (syncing) return syncing;
