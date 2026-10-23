@@ -513,7 +513,7 @@ function vPagos(k) {
     ${noToca.length ? `<details><summary>No toca este mes (${noToca.length}) · bimestrales, ocasionales y sin cargo</summary><div class="list">${noToca.sort((a, b) => a.nombre.localeCompare(b.nombre)).map(c => { const n = fq(c), p = proximo(c, S.mesId);
       return `<div class="row flat"><button class="main" data-act="editCon" data-id="${esc(c.id)}"><div class="name">${esc(c.nombre)}</div><div class="meta"><span class="pill info">${n === 0 ? 'Ocasional · cuando compres' : p ? 'Próximo: ' + mesLbl(p) : 'Sin cargo este mes'}</span><span class="acct"><span class="dot" style="background:${catColor(c.categoria)}"></span>${esc(c.categoria || '')}</span></div></button><button class="btn sm" data-act="addLinea" data-id="${esc(c.id)}">Agregar a ${mesN(S.mesId)}</button></div>`; }).join('')}</div></details>` : ''}
   </section>
-  <p class="note">Toca el círculo para registrar un pago o cerrarlo aunque gastes menos (el sobrante va a ahorro). Toca el nombre para editar o eliminar.</p>
+  <p class="note">Toca el círculo para registrar el pago: ya trae el monto completo, o escribe menos y marca “Cerrar el pago” para mandar el sobrante a ahorro. Toca el nombre para editar o eliminar.</p>
   <section class="card">
     <div class="sec-h"><h2>Movimientos de ${mesN(S.mesId)} · ${movs.length}</h2><button class="link" data-act="newGasto">+ Gasto</button></div>
     ${movs.length ? `<div class="list">${movs.map(movRowHTML).join('')}</div><p class="note" style="margin-top:8px">Toca un movimiento para corregirlo o eliminarlo si lo registraste por error.</p>` : '<p class="note">Sin movimientos este mes.</p>'}
@@ -839,12 +839,10 @@ function sheetGasto(preId) {
   bindMetaCuenta(f, 'gs'); syncCta(); upd();
 }
 
+// El círculo siempre abre el pago: monto completo ya escrito (un toque en Guardar) y opción de pagar menos o cerrar el pago.
 function quickToggle(id) {
-  const r = linea(id); if (!r) return;
-  if (r.cerrado || r.pend <= 0 || r.variable || r.plan <= 0) { sheetPago(id); return; }
-  const fecha = fechaDef();
-  const ops = [G('movimientos', { id: uid('m'), mes: S.mesId, fecha, concepto: r.nombre, categoria: r.cat, monto: r.pend, cuenta: r.cta, nota: '', tipo: 'Pago', pagoId: r.id }), ...opsLinea(r, r.plan, { fechaPago: fecha })];
-  commit(ops, 'Pago ' + r.nombre, `Pagado ${fmt(r.pend)} desde ${r.cta}`);
+  if (!linea(id)) return;
+  sheetPago(id);
 }
 
 function sheetPago(id) {
@@ -875,7 +873,7 @@ function sheetPago(id) {
     ${tog('p_x', 'Cerrar el pago (gasté menos de lo presupuestado y no habrá más cargos)', false)}
     <div data-when="p_x" class="sub-box"><div class="diff info" id="p_sob"></div><div id="p_ahw">${ahorroBox('ps', r.cta)}</div></div>
     ${r.c && !r.unaVez ? tog('p_b', 'Usar el total pagado como monto base de los próximos meses', false) : ''}
-    ${actions('Guardar', `<div class="btns" style="margin-right:auto">${btnPorPagar(r)}<button type="button" class="btn" data-act2="editar">Editar</button></div>`)}`, (fd, btn) => {
+    ${actions(r.pend > 0 ? 'Registrar pago' : 'Guardar', `<div class="btns" style="margin-right:auto">${btnPorPagar(r)}<button type="button" class="btn" data-act2="editar">Editar</button></div>`)}`, (fd, btn) => {
     if (btn === 'porpagar') { closeSheet(); commit(opsPorPagar(r), 'Por pagar ' + r.nombre, r.nombre + ' vuelve a por pagar'); return; }
     const monto = num(fd.get('p_m')), cerrar = !!fd.get('p_x'), fecha = fd.get('p_f') || fechaDef();
     if (!(monto > 0) && !cerrar) { toast('Escribe el monto que pagaste o marca “Cerrar el pago”.'); return; }
