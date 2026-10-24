@@ -959,10 +959,17 @@ function sheetLinea(id) {
     const mz = materializar(r), rr = mz.r, ops = [...cat.ops, ...mz.ops];
     const tipo = fd.get('u_t'), forma = fd.get('u_fo'), cuenta = fd.get('u_a');
     const perm = btn === 'perm';
-    if (perm && conDe(nombre)) { toast('Ya existe un concepto con ese nombre.'); return; }
+    // Gasto libre: su nombre y categoría viven en un concepto oculto (inactivo) de la hoja; se edita ahí.
+    const oculto = r.c && r.c.activo === false ? r.c : null;
+    const otro = conDe(nombre);
+    if (otro && (!oculto || otro.id !== oculto.id) && (perm || !eq(nombre, r.nombre))) { toast('Ya existe un concepto con ese nombre.', 4000); return; }
     ops.push(G('pagos', { id: rr.id, concepto: nombre, categoria: cat.nombre, tipo, forma, cuenta, plan: num(fd.get('u_p')), fechaLimite: fd.get('u_v') || '', unaVez: !perm }));
     if (!eq(nombre, r.nombre) || !eq(cat.nombre, r.cat)) r.movs.forEach(m => ops.push(G('movimientos', { id: m.id, concepto: nombre, categoria: cat.nombre })));
-    if (perm) { const dia = r.p.fechaLimite ? +r.p.fechaLimite.slice(8) : (r.movs[0] && r.movs[0].fecha ? +String(r.movs[0].fecha).slice(8) : ''); ops.push(G('conceptos', { id: uid('c'), nombre, categoria: cat.nombre, tipo, forma, cuenta, frecuencia: 'Mensual', ancla: '', dia, monto: num(fd.get('u_p')) || r.pag, variable: tipo === 'Variable', suscripcion: false, negocio: false, activo: true })); }
+    if (oculto) {
+      const dia = r.p.fechaLimite ? +r.p.fechaLimite.slice(8) : (r.movs[0] && r.movs[0].fecha ? +String(r.movs[0].fecha).slice(8) : '');
+      ops.push(G('conceptos', Object.assign({ id: oculto.id, nombre, categoria: cat.nombre, tipo, forma, cuenta, monto: num(fd.get('u_p')) || r.pag },
+        perm ? { activo: true, frecuencia: 'Mensual', ancla: '', dia, variable: tipo === 'Variable' } : {})));
+    } else if (perm) { const dia = r.p.fechaLimite ? +r.p.fechaLimite.slice(8) : (r.movs[0] && r.movs[0].fecha ? +String(r.movs[0].fecha).slice(8) : ''); ops.push(G('conceptos', { id: uid('c'), nombre, categoria: cat.nombre, tipo, forma, cuenta, frecuencia: 'Mensual', ancla: '', dia, monto: num(fd.get('u_p')) || r.pag, variable: tipo === 'Variable', suscripcion: false, negocio: false, activo: true })); }
     closeSheet(); commit(ops, 'Editar ' + nombre, perm ? 'Ahora es un concepto permanente' : 'Gasto actualizado');
   });
 }
