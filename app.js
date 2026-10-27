@@ -149,6 +149,7 @@ async function sincronizar() {
       guardarCache();
       elegirMes();
       setSync('ok');
+      completarDias();
       if (!$('#sheet')) { render(); revisarPago(); }
     } catch (e) {
       if (e.red) setSync('off'); else { setSync('err', e.message); if (e.codigo === 'clave') toast(e.message + ' Revisa la clave en Ajustes → Conexión.', 6000); }
@@ -268,11 +269,14 @@ function mkLinea(p, c, movs, mid) {
   const forma = p.forma || (c && c.forma) || 'Pago directo';
   const cta = cuentaRegla({ cuenta: p.cuenta || (c && c.cuenta), forma, tipo });
   const fecha = p.fechaLimite || (c && c.dia ? fechaCiclo(mid, c.dia) : null);
+  const pendBase = cerrado ? 0 : Math.max(r2(plan - pag), 0);
+  const fuera = pendBase > 0 && !!fecha && fecha > cicloFin(mid); // vence después del 14: lo paga el siguiente ciclo
   return {
     id: p.id, p, c, mid, nombre: p.concepto || (c && c.nombre) || 'Sin nombre', cat: p.categoria || (c && c.categoria) || 'Otros',
     cta, plan, pag, cerrado, sobrante: +p.sobrante || 0, unaVez: !!p.unaVez || !c, movs, tipo, forma,
     variable: tipo === 'Variable' || !!(c && c.variable), extra: tipo === 'Extra', fecha,
-    comp: cerrado ? pag : Math.max(plan, pag), pend: cerrado ? 0 : Math.max(r2(plan - pag), 0)
+    fuera, pendSig: fuera ? pendBase : 0,
+    comp: cerrado || fuera ? pag : Math.max(plan, pag), pend: fuera ? 0 : pendBase
   };
 }
 function lineasMes(mid) {
@@ -400,6 +404,7 @@ function materializar(r) {
 function toast(t, ms) { const el = $('#toast'); el.textContent = t; el.hidden = false; clearTimeout(toast._t); toast._t = setTimeout(() => el.hidden = true, ms || 2800); }
 function vencChip(r) {
   if (r.cerrado) return `<span class="pill good">Cerrado${r.sobrante > 0 ? ' · ' + fmt(r.sobrante) + ' a ahorro' : ''}</span>`;
+  if (r.fuera) return `<span class="pill info">Siguiente ciclo · vence ${fLbl(r.fecha)}</span>`;
   if (r.plan > 0 && r.pend === 0) { const f = r.p.fechaPago; return `<span class="pill good">Pagado${f ? ' ' + fLbl(f) : ''}</span>`; }
   if (r.pend <= 0) return '';
   if (!r.fecha) return '<span class="pill info">Sin fecha</span>';
@@ -459,7 +464,7 @@ function vResumen(k) {
   const o = saldos(S.mesId, k), dsp = dispersion(k, o);
   const movs = S.T.movimientos.filter(m => !esAjuste(m) && mesMov(m) === S.mesId).sort((a, b) => String(b.fecha).localeCompare(String(a.fecha))).slice(0, 6);
   const abierto = S.mesId === cicloAbierto();
-  return `${avisoEstructura()}${avisoTransicion()}
+  return `${avisoEstructura()}
   <section class="hero">
     <div class="label">Disponible hoy · todas tus cuentas · ciclo ${cicloRango(S.mesId)}</div>
     <div class="big num">${fmt(k.disp)}</div>
@@ -500,7 +505,8 @@ function vResumen(k) {
 
 function vPagos(k) {
   const f = S.filtro, v = S.vista;
-  let rows = k.rows;
+  let rows = k.rows.filter(r => !r.fuera);
+  const sig = k.rows.filter(r => r.fuera).sort((a, b) => a.fecha.localeCompare(b.fecha));
   if (f === 'pend') rows = rows.filter(r => r.pend > 0 || (r.plan === 0 && r.pag === 0 && !r.cerrado));
   if (f === 'pag') rows = rows.filter(r => r.pag > 0 && r.pend === 0 || r.cerrado);
   const conLinea = new Set(k.rows.map(r => N(r.nombre)));
@@ -520,7 +526,7 @@ function vPagos(k) {
     body = order.map(c => grp(esc(c), by[c], '', '', `<span class="dot" style="background:${v === 'cuenta' ? ctaColor(c) : catColor(c)};margin-right:8px"></span>`)).join('');
   }
   const movs = S.T.movimientos.filter(m => !esAjuste(m) && mesMov(m) === S.mesId).sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
-  return `${avisoTransicion()}
+  return `
   <div class="sec-h" style="margin:0"><h2>Pagos de ${mesLbl(S.mesId)} <span class="note" style="font-weight:400">· ${cicloRango(S.mesId)}</span></h2><div class="btns"><button class="btn sm" data-act="fechas">Fechas, forma y cuenta</button><button class="btn sm" data-act="newCon">Nuevo concepto</button></div></div>
   <div class="bar2">
     <div class="chips" role="group" aria-label="Filtro">
@@ -534,6 +540,8 @@ function vPagos(k) {
   </div>
   <section class="card">
     ${body || `<p class="note">${f === 'pend' ? 'Todo pagado este mes.' : 'Sin conceptos en este filtro.'}</p>`}
+    ${sig.length && f !== 'pag' ? `<div class="grp"><div class="grp-h"><span>Siguiente ciclo · vencen después del ${fLbl(cicloFin(S.mesId))} · ${sig.length}</span><span class="num">${fmt(sum(sig, r => r.pendSig))}</span></div><div class="list">${sig.map(rowHTML).join('')}</div>
+      <p class="note" style="margin-top:6px">No cuentan en “Por pagar” de este ciclo: al cerrarlo pasan solos al siguiente. Si alguno sí es de este ciclo, corrige su fecha límite.</p></div>` : ''}
     ${noToca.length ? `<details><summary>No toca este mes (${noToca.length}) · bimestrales, ocasionales y sin cargo</summary><div class="list">${noToca.sort((a, b) => a.nombre.localeCompare(b.nombre)).map(c => { const n = fq(c), p = proximo(c, S.mesId);
       return `<div class="row flat"><button class="main" data-act="editCon" data-id="${esc(c.id)}"><div class="name">${esc(c.nombre)}</div><div class="meta"><span class="pill info">${n === 0 ? 'Ocasional · cuando compres' : p ? 'Próximo: ' + mesLbl(p) : 'Sin cargo este mes'}</span><span class="acct"><span class="dot" style="background:${catColor(c.categoria)}"></span>${esc(c.categoria || '')}</span></div></button><button class="btn sm" data-act="addLinea" data-id="${esc(c.id)}">Agregar a ${mesN(S.mesId)}</button></div>`; }).join('')}</div></details>` : ''}
   </section>
@@ -1321,7 +1329,6 @@ function sheetCfg() {
   });
 }
 /* ================= ciclo: cierre, ajustes de saldo y pago del día 15 ================= */
-const TRANS = addM(CICLO_DESDE, -1); // octubre 2026: ciclo de transición (1 oct – 14 nov)
 const cicloAbierto = () => { const ids = mesesDisp(); return S.cfg.mesActivo && ids.includes(S.cfg.mesActivo) ? S.cfg.mesActivo : (ids[ids.length - 1] || mesHoy()); };
 const pagoPrincipal = () => fijosActivos().slice().sort((a, b) => (+b.monto || 0) - (+a.monto || 0))[0] || null;
 const cuentasAhorro = o => Object.values(o).filter(a => rolDe(a.c) === 'ahorro');
@@ -1370,26 +1377,6 @@ function ajusteRowHTML(m) {
     <div class="amt num" style="color:${+m.monto >= 0 ? 'var(--good)' : 'var(--crit)'}">${+m.monto >= 0 ? '+' : ''}${fmt(m.monto)}</div></div>`;
 }
 
-/* Octubre 2026 se extiende al 14 nov: los pagos con día 1–14 de noviembre caen en este ciclo. */
-function faltanTransicion() {
-  if (cicloAbierto() !== TRANS || LS.get('fm_transOk', false)) return [];
-  const pagos = S.T.pagos.filter(p => p.mes === TRANS), ini = CICLO_DESDE + '-01';
-  return S.T.conceptos.filter(c => c.nombre && c.activo !== false && tipoDe(c) !== 'Extra' && fq(c) !== 0 && +c.dia >= 1 && +c.dia < DIA_CICLO && tocaEn(c, CICLO_DESDE))
-    .filter(c => !pagos.some(p => eq(p.concepto, c.nombre) && String(p.fechaLimite || '') >= ini))
-    .map(c => ({ c, plan: estimar(c, CICLO_DESDE), fecha: diaEnMes(CICLO_DESDE, c.dia) })).filter(x => x.plan > 0);
-}
-function avisoTransicion() {
-  if (S.mesId !== TRANS) return '';
-  const L = faltanTransicion(); if (!L.length) return '';
-  return `<div class="box" style="border-color:var(--warn);color:var(--ink)"><b>${esc(mesLbl(TRANS))} ahora llega al 14 de noviembre.</b> Del 1 al 14 nov vencen ${L.length} pago${L.length === 1 ? '' : 's'} por ${fmt(sum(L, x => x.plan))} que aún no están en este ciclo: ${L.map(x => esc(x.c.nombre) + ' (' + fLbl(x.fecha) + ')').join(', ')}.
-    <div class="btns" style="margin-top:8px"><button class="btn sm pri" data-act="transAdd">Agregarlos</button><button class="btn sm" data-act="transNo">Ya los tengo</button></div></div>`;
-}
-function agregarTransicion() {
-  const L = faltanTransicion(); if (!L.length) return;
-  commit(L.map(x => G('pagos', { id: uid('p'), mes: TRANS, concepto: x.c.nombre, categoria: x.c.categoria, tipo: tipoDe(x.c), forma: formaDe(x.c), cuenta: x.c.cuenta || '', plan: x.plan, pagado: 0, fechaLimite: x.fecha, cerrado: false, sobrante: 0, unaVez: false })),
-    'Pagos 1–14 nov', L.length + ' pagos agregados a ' + mesLbl(TRANS));
-}
-
 function sheetCerrarCiclo(llego) {
   const from = cicloAbierto(), nid = addM(from, 1), pp = pagoPrincipal();
   if (S.T.pagos.some(p => p.mes === nid) || S.T.saldos.some(s => s.mes === nid)) {
@@ -1401,6 +1388,7 @@ function sheetCerrarCiclo(llego) {
   }
   const k = calc(from), o = saldos(from, k), fijos = fijosActivos(), L = cuentas();
   const pend = k.rows.filter(r => r.pend > 0 && !r.cerrado && !(r.p && r.p._virtual));
+  const sig = k.rows.filter(r => r.fuera && !(r.p && r.p._virtual));
   const cons = S.T.conceptos.filter(c => c.nombre && c.activo !== false && tipoDe(c) !== 'Extra');
   const rec = cons.filter(c => fq(c) !== 0 && tocaCiclo(c, nid)).map(c => ({ c, plan: estimar(c, nid) })).filter(x => x.plan > 0);
   const omit = cons.filter(c => fq(c) > 1 && !tocaCiclo(c, nid)).map(c => c.nombre);
@@ -1408,7 +1396,7 @@ function sheetCerrarCiclo(llego) {
   const ahAcum = sum(cuentasAhorro(o), a => a.saldo);
   const f = openSheet(`<h3>Cerrar ${esc(mesLbl(from))}</h3>
     <p class="note">Ciclo ${cicloRango(from)}. Se abre ${esc(mesLbl(nid))}: ${cicloRango(nid)}.</p>
-    <div class="kv"><span>Ingresos recibidos</span><span class="num">${fmt(k.ingRec)}</span><span>Pagado</span><span class="num">${fmt(k.pag)}</span><span>Ahorro registrado</span><span class="num">${fmt(k.ahorroReg)}</span>${k.aj ? `<span>Ajustes de saldo</span><span class="num">${k.aj > 0 ? '+' : ''}${fmt(k.aj)}</span>` : ''}<span>Por pagar</span><span class="num">${fmt(k.pend)}</span></div>
+    <div class="kv"><span>Ingresos recibidos</span><span class="num">${fmt(k.ingRec)}</span><span>Pagado</span><span class="num">${fmt(k.pag)}</span><span>Ahorro registrado</span><span class="num">${fmt(k.ahorroReg)}</span>${k.aj ? `<span>Ajustes de saldo</span><span class="num">${k.aj > 0 ? '+' : ''}${fmt(k.aj)}</span>` : ''}<span>Por pagar</span><span class="num">${fmt(k.pend)}</span>${sig.length ? `<span>Pasan al siguiente ciclo</span><span class="num">${fmt(sum(sig, r => r.pendSig))} · ${sig.length}</span>` : ''}</div>
     ${pend.length ? `<div class="label" style="margin-top:6px">Pendientes · ${pend.length} · ${fmt(sum(pend, r => r.pend))}</div>
       <p class="note">${pend.map(r => esc(r.nombre) + ' ' + fmt(r.pend)).join(' · ')}</p>
       ${seg('cc_p', '', [['pasar', 'Pasarlos a ' + mesN(nid)], ['cancelar', 'Ya no se pagarán']], 'pasar')}` : ''}
@@ -1425,12 +1413,18 @@ function sheetCerrarCiclo(llego) {
       ops.push(G('pagos', { id: r.id, cerrado: true, sobrante: 0 }));
       if (pasar) ops.push(G('pagos', { id: uid('p'), mes: nid, concepto: r.nombre, categoria: r.cat, tipo: r.tipo, forma: r.forma, cuenta: r.cta, plan: r.pend, pagado: 0, fechaLimite: r.fecha || '', cerrado: false, sobrante: 0, unaVez: true }));
     });
+    const yaVan = new Set();
+    sig.forEach(r => { // vencen en el ciclo nuevo: se mudan como su pago de ese ciclo (sin duplicar el recurrente)
+      ops.push(G('pagos', { id: r.id, cerrado: true, sobrante: 0 }));
+      ops.push(G('pagos', { id: uid('p'), mes: nid, concepto: r.nombre, categoria: r.cat, tipo: r.tipo, forma: r.forma, cuenta: r.cta, plan: r.pendSig, pagado: 0, fechaLimite: r.fecha, cerrado: false, sobrante: 0, unaVez: !r.c || r.unaVez }));
+      yaVan.add(N(r.nombre));
+    });
     L.forEach((c, i) => {
       const v = num(fd.get('cc_' + i)), d = r2(v - r2((o[N(c.nombre)] || { saldo: 0 }).saldo));
       if (Math.abs(d) >= 0.5) ops.push(opAjuste(from, c.nombre, d, 'Cuadre al cierre de ' + mesLbl(from)));
       ops.push(G('saldos', { id: uid('s'), mes: nid, cuenta: c.nombre, saldo: v }));
     });
-    rec.forEach(x => ops.push(G('pagos', { id: uid('p'), mes: nid, concepto: x.c.nombre, categoria: x.c.categoria, tipo: tipoDe(x.c), forma: formaDe(x.c), cuenta: x.c.cuenta || '', plan: x.plan, pagado: 0, fechaLimite: x.c.dia ? fechaCiclo(nid, x.c.dia) : '', cerrado: false, sobrante: 0, unaVez: false })));
+    rec.filter(x => !yaVan.has(N(x.c.nombre))).forEach(x => ops.push(G('pagos', { id: uid('p'), mes: nid, concepto: x.c.nombre, categoria: x.c.categoria, tipo: tipoDe(x.c), forma: formaDe(x.c), cuenta: x.c.cuenta || '', plan: x.plan, pagado: 0, fechaLimite: x.c.dia ? fechaCiclo(nid, x.c.dia) : '', cerrado: false, sobrante: 0, unaVez: false })));
     const montoPago = num(fd.get('cc_m')), ctaPago = fd.get('cc_a') || cIng();
     if (llego && !(montoPago > 0)) { toast('Escribe el monto del pago que llegó.'); return; }
     fijos.forEach(fj => {
@@ -1452,6 +1446,16 @@ function sheetCerrarCiclo(llego) {
     diffBox(f.querySelector('#cc_d'), n ? t : 1, (n ? `<span>${n} ajuste${n === 1 ? '' : 's'} de saldo al cierre</span><b>${t > 0 ? '+' : ''}${fmt(t)}</b>` : `<span>Ahorro acumulado que pasa a ${esc(mesN(nid))}</span><b>${fmt(ah)}</b>`));
   };
   f.addEventListener('input', upd); upd();
+}
+
+// Conceptos sin día de pago: lo toma de la fecha límite que ya capturaste en "Pagos del mes" (solo llena vacíos).
+function completarDias() {
+  const ab = cicloAbierto(), ops = [];
+  S.T.conceptos.filter(c => c.nombre && !(+c.dia >= 1)).forEach(c => {
+    const p = S.T.pagos.filter(x => eq(x.concepto, c.nombre) && /^\d{4}-\d{2}-\d{2}$/.test(String(x.fechaLimite || ''))).sort((a, b) => (b.mes === ab) - (a.mes === ab) || String(b.mes).localeCompare(String(a.mes)))[0];
+    if (p) ops.push(G('conceptos', { id: c.id, dia: +p.fechaLimite.slice(8) }));
+  });
+  if (ops.length) commit(ops, 'Días de pago', ops.length + ' días de pago tomados de tus fechas límite');
 }
 
 // Día 15 a las 5 pm: si el ciclo nuevo no se ha abierto, pregunta si ya llegó el pago mensual.
@@ -1526,8 +1530,7 @@ document.addEventListener('click', e => {
     editCatIng: () => sheetCat(id || null, b.dataset.v, 'ingreso'), newCatIng: () => sheetCat(null, null, 'ingreso'),
     editCfg: () => sheetCfg(), newMeta: () => sheetMeta(null), editMeta: () => sheetMeta(id), abonar: () => abonar(id),
     newAhorro: () => sheetAhorro(null), editAhorro: () => sheetAhorro(id),
-    editMes: () => sheetMes(), cerrarCiclo: () => sheetCerrarCiclo(false), ajustar: () => sheetAjuste(), verAjuste: () => sheetVerAjuste(id),
-    transAdd: () => agregarTransicion(), transNo: () => { LS.set('fm_transOk', true); render(); }, newTr: () => sheetTr(null, null), doTr: () => sheetTr(id, +b.dataset.v),
+    editMes: () => sheetMes(), cerrarCiclo: () => sheetCerrarCiclo(false), ajustar: () => sheetAjuste(), verAjuste: () => sheetVerAjuste(id), newTr: () => sheetTr(null, null), doTr: () => sheetTr(id, +b.dataset.v),
     delTr: () => { if (!arm('tr' + id)) return; commit([DEL('transferencias', id)], 'Quitar transferencia', 'Transferencia quitada'); }
   };
   if (map[a]) map[a]();
