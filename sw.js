@@ -1,7 +1,7 @@
 /* Finanzas Matt · service worker
    Archivos de la app: primero red (para ver siempre la última versión), caché si no hay internet.
    La API de Google no pasa por aquí: los datos sin conexión los guarda la app. */
-const CACHE = 'finanzas-matt-v7';
+const CACHE = 'finanzas-matt-v8';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png', 'icons/favicon-32.png'];
 
