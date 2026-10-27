@@ -424,7 +424,7 @@ function rowHTML(r) {
   return `<div class="row ${done ? 'paid' : ''}">
     <button class="chk ${done ? 'on' : part ? 'part' : ''}" data-act="toggle" data-id="${esc(r.id)}" aria-label="${done ? 'Ver pago' : 'Registrar pago'}: ${esc(r.nombre)}">${done ? CHECK : ''}</button>
     <button class="main" data-act="editLinea" data-id="${esc(r.id)}"><div class="name">${esc(r.nombre)}</div>
-      <div class="meta">${vencChip(r)}<span class="acct"><span class="dot" style="background:${catColor(r.cat)}"></span>${esc(r.cat)}</span><span>${esc(r.forma)}</span>${acctTag(r.cta)}${extra}</div></button>
+      <div class="meta">${vencChip(r)}<span class="acct"><span class="dot" style="background:${catColor(r.cat)}"></span>${esc(r.cat)}</span>${r.forma === 'Cargo automático' ? '<span class="pill info">⟳ Cargo automático</span>' : `<span>${esc(r.forma)}</span>`}${acctTag(r.cta)}${extra}</div></button>
     <div class="amt"><div class="num">${fmt(r.pag)}</div><div class="of num">de ${r.variable && !done ? '≈' : ''}${fmt(r.plan)}</div></div></div>`;
 }
 function ingRowHTML(x) {
@@ -519,11 +519,12 @@ function vPagos(k) {
     const used = new Set();
     body = Gs.map(([t, cls, fn]) => { const rs = rows.filter(r => !used.has(r.id) && fn(r)); rs.forEach(r => used.add(r.id)); return rs.length ? grp(t, rs, cls) : ''; }).join('');
   } else {
-    const key = v === 'cuenta' ? (r => r.cta) : (r => r.cat);
+    const key = v === 'cuenta' ? (r => r.cta) : v === 'forma' ? (r => r.forma) : (r => r.cat);
     const by = {}; rows.forEach(r => (by[key(r)] = by[key(r)] || []).push(r));
-    const base = v === 'cuenta' ? cuentas().map(c => c.nombre) : catsGasto().map(c => c.nombre);
+    const base = v === 'cuenta' ? cuentas().map(c => c.nombre) : v === 'forma' ? FORMAS : catsGasto().map(c => c.nombre);
     const order = [...base, ...Object.keys(by)].filter((x, i, a) => by[x] && a.indexOf(x) === i);
-    body = order.map(c => grp(esc(c), by[c], '', '', `<span class="dot" style="background:${v === 'cuenta' ? ctaColor(c) : catColor(c)};margin-right:8px"></span>`)).join('');
+    const nota = c => c === 'Cargo automático' ? '<p class="note" style="margin-top:6px">Se cobran solos: solo cuida que la cuenta tenga saldo antes de la fecha.</p>' : '';
+    body = order.map(c => grp(esc(c), by[c], '', nota(c), v === 'forma' ? '' : `<span class="dot" style="background:${v === 'cuenta' ? ctaColor(c) : catColor(c)};margin-right:8px"></span>`)).join('');
   }
   const movs = S.T.movimientos.filter(m => !esAjuste(m) && mesMov(m) === S.mesId).sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
   return `
@@ -536,7 +537,8 @@ function vPagos(k) {
     <div class="chips" role="group" aria-label="Agrupar">
       <button data-act="vista" data-v="fecha" aria-pressed="${v === 'fecha'}">Por fecha</button>
       <button data-act="vista" data-v="cat" aria-pressed="${v === 'cat'}">Por categoría</button>
-      <button data-act="vista" data-v="cuenta" aria-pressed="${v === 'cuenta'}">Por cuenta</button></div>
+      <button data-act="vista" data-v="cuenta" aria-pressed="${v === 'cuenta'}">Por cuenta</button>
+      <button data-act="vista" data-v="forma" aria-pressed="${v === 'forma'}">Por forma de pago</button></div>
   </div>
   <section class="card">
     ${body || `<p class="note">${f === 'pend' ? 'Todo pagado este mes.' : 'Sin conceptos en este filtro.'}</p>`}
