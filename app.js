@@ -405,6 +405,7 @@ function toast(t, ms) { const el = $('#toast'); el.textContent = t; el.hidden = 
 function vencChip(r) {
   if (r.cerrado) return `<span class="pill good">Cerrado${r.sobrante > 0 ? ' · ' + fmt(r.sobrante) + ' a ahorro' : ''}</span>`;
   if (r.fuera) return `<span class="pill info">Siguiente ciclo · vence ${fLbl(r.fecha)}</span>`;
+  if (r.plan > 0 && r.pend === 0 && dobleCargo(r)) return `<span class="pill warn">Pagado · falta cargo ${fLbl(dobleCargo(r).f2)}</span>`;
   if (r.plan > 0 && r.pend === 0) { const f = r.p.fechaPago; return `<span class="pill good">Pagado${f ? ' ' + fLbl(f) : ''}</span>`; }
   if (r.pend <= 0) return '';
   if (!r.fecha) return '<span class="pill info">Sin fecha</span>';
@@ -885,6 +886,39 @@ function quickToggle(id) {
   sheetPago(id);
 }
 
+/* Un cargo mensual con día de pago puede caer dos veces en un ciclo largo (octubre 2026: 1 oct – 14 nov).
+   Si el concepto ya tiene un pago en el ciclo y le falta el otro cargo, se ofrece registrarlo. */
+function dobleCargo(r) {
+  if (!r || !r.c || r.unaVez || fq(r.c) !== 1 || !(+r.c.dia >= 1) || !(r.pag > 0)) return null;
+  const ini = cicloIni(S.mesId), fin = cicloFin(S.mesId), fs = [];
+  for (let ym = ini.slice(0, 7); ym <= fin.slice(0, 7); ym = addM(ym, 1)) { const f = diaEnMes(ym, r.c.dia); if (f >= ini && f <= fin) fs.push(f); }
+  if (fs.length < 2) return null;
+  const filas = S.T.pagos.filter(p => p.mes === S.mesId && eq(p.concepto, r.nombre));
+  return filas.length >= fs.length ? null : { f1: fs[0], f2: fs[1] };
+}
+function dobleCargoHTML(r) {
+  const d = dobleCargo(r); if (!d) return '';
+  return `<div class="box" style="border-color:var(--warn)">Este ciclo tiene dos cargos de ${esc(r.nombre)}: ${fLbl(d.f1)} y ${fLbl(d.f2)}. El pago que ya registraste cuenta como el del ${fLbl(d.f1)}.
+    <div class="btns" style="margin-top:8px"><button type="button" class="btn sm pri" data-act2="doble">Registrar cargo del ${fLbl(d.f2)}</button></div></div>`;
+}
+function sheetDobleCargo(id) {
+  const r = linea(id), d = dobleCargo(r); if (!d) return;
+  const monto0 = +r.c.monto || r.plan;
+  openSheet(`<h3>${esc(r.nombre)} · cargo del ${fLbl(d.f2)}</h3>
+    <p class="note">Se registra como un segundo pago de ${esc(r.nombre)} en ${esc(mesLbl(S.mesId))}. El pago anterior queda con fecha límite ${fLbl(d.f1)}.</p>
+    <div class="two">${fld('d_m', 'Monto cobrado', monto0, 'number', 'required')}${fld('d_f', 'Fecha del cargo', hoyISO() > d.f2 ? d.f2 : hoyISO(), 'date')}</div>
+    ${ctaSel('d_a', 'Cobrado en', r.cta)}
+    ${actions('Registrar cargo')}`, fd => {
+    const monto = num(fd.get('d_m')), fecha = fd.get('d_f') || d.f2;
+    if (!(monto > 0)) { toast('Escribe el monto que te cobraron.'); return; }
+    const pid = uid('p');
+    const ops = [
+      G('pagos', { id: r.id, fechaLimite: d.f1 }),
+      G('pagos', { id: pid, mes: S.mesId, concepto: r.nombre, categoria: r.cat, tipo: r.tipo, forma: r.forma, cuenta: fd.get('d_a') || r.cta, plan: monto, pagado: monto, fechaLimite: d.f2, fechaPago: fecha, cerrado: false, sobrante: 0, unaVez: true }),
+      G('movimientos', { id: uid('m'), mes: S.mesId, fecha, concepto: r.nombre, categoria: r.cat, monto, cuenta: fd.get('d_a') || r.cta, nota: 'Cargo del ' + fLbl(d.f2), tipo: 'Pago', pagoId: pid })];
+    closeSheet(); commit(ops, 'Cargo ' + r.nombre, r.nombre + ': cargo del ' + fLbl(d.f2) + ' registrado');
+  });
+}
 function sheetPago(id) {
   let r = linea(id); if (!r) return;
   const prev = pagosPrevios(r.nombre, S.mesId)[0];
@@ -896,6 +930,7 @@ function sheetPago(id) {
   if (r.cerrado) {
     const f = openSheet(`${head}
       <div class="diff good"><span>Pago cerrado${r.sobrante > 0 ? ' · sobrante a ahorro' : ''}</span><b>${fmt(r.sobrante)}</b></div>
+      ${dobleCargoHTML(r)}
       ${ah ? `<p class="note">${esc(ah.de)} → ${esc(ah.a)}${ah.meta ? ' · meta ' + esc(ah.meta) : ''}.</p>` : ''}
       <p class="note">Reabrir quita el registro de ahorro de este sobrante y deja el pago como pendiente.</p>
       ${actions('Listo', `<div class="btns" style="margin-right:auto">${btnPorPagar(r)}<button class="btn" value="reabrir">Reabrir pago</button></div>`)}`, (fd, btn) => {
@@ -903,11 +938,12 @@ function sheetPago(id) {
       if (btn === 'reabrir') { closeSheet(); commit([G('pagos', { id: r.id, cerrado: false, sobrante: 0 }), ah && DEL('ahorros', ah.id)], 'Reabrir ' + r.nombre, 'Pago reabierto'); return; }
       closeSheet();
     });
-    bindDelMov(f, r);
+    bindDelMov(f, r); bindDoble(f, r);
     return;
   }
   const f = openSheet(`${head}
     ${r.pag > 0 && r.pend === 0 ? '<div class="diff good"><span>Ya está pagado completo. Si lo marcaste por error usa “Marcar por pagar”.</span></div>' : ''}
+    ${dobleCargoHTML(r)}
     <div class="two">${fld('p_m', r.pag > 0 && r.pend === 0 ? 'Agregar otro pago (opcional)' : 'Monto de este pago', r.pend || '', 'number')}${fld('p_f', 'Fecha de pago', fechaDef(), 'date')}</div>
     ${ctaSel('p_a', 'Pagado desde', r.cta)}
     ${tog('p_x', 'Cerrar el pago (gasté menos de lo presupuestado y no habrá más cargos)', false)}
@@ -938,8 +974,9 @@ function sheetPago(id) {
   f.addEventListener('input', upd); upd();
   f.querySelector('#p_a').addEventListener('change', e => { f.querySelector('#ps_de').value = e.target.value; });
   f.querySelector('[data-act2="editar"]').addEventListener('click', () => sheetLinea(r.id));
-  bindMetaCuenta(f, 'ps'); bindDelMov(f, r);
+  bindMetaCuenta(f, 'ps'); bindDelMov(f, r); bindDoble(f, r);
 }
+function bindDoble(f, r) { const b = f.querySelector('[data-act2="doble"]'); if (b) b.addEventListener('click', () => { closeSheet(); sheetDobleCargo(r.id); }); }
 // Deshace el pago completo: borra sus movimientos y su ahorro ligado, y lo deja por pagar.
 function opsPorPagar(r) {
   const ah = ahorroDe(r.id, 'Pago');
