@@ -465,7 +465,7 @@ function vResumen(k) {
   const o = saldos(S.mesId, k), dsp = dispersion(k, o);
   const movs = S.T.movimientos.filter(m => !esAjuste(m) && mesMov(m) === S.mesId).sort((a, b) => String(b.fecha).localeCompare(String(a.fecha))).slice(0, 6);
   const abierto = S.mesId === cicloAbierto();
-  return `${avisoEstructura()}
+  return `${avisoEstructura()}${avisoDobles()}
   <section class="hero">
     <div class="label">Disponible hoy · todas tus cuentas · ciclo ${cicloRango(S.mesId)}</div>
     <div class="big num">${fmt(k.disp)}</div>
@@ -528,7 +528,7 @@ function vPagos(k) {
     body = order.map(c => grp(esc(c), by[c], '', nota(c), v === 'forma' ? '' : `<span class="dot" style="background:${v === 'cuenta' ? ctaColor(c) : catColor(c)};margin-right:8px"></span>`)).join('');
   }
   const movs = S.T.movimientos.filter(m => !esAjuste(m) && mesMov(m) === S.mesId).sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
-  return `
+  return `${avisoDobles()}
   <div class="sec-h" style="margin:0"><h2>Pagos de ${mesLbl(S.mesId)} <span class="note" style="font-weight:400">· ${cicloRango(S.mesId)}</span></h2><div class="btns"><button class="btn sm" data-act="fechas">Fechas, forma y cuenta</button><button class="btn sm" data-act="newCon">Nuevo concepto</button></div></div>
   <div class="bar2">
     <div class="chips" role="group" aria-label="Filtro">
@@ -888,10 +888,14 @@ function quickToggle(id) {
 
 /* Un cargo mensual con día de pago puede caer dos veces en un ciclo largo (octubre 2026: 1 oct – 14 nov).
    Si el concepto ya tiene un pago en el ciclo y le falta el otro cargo, se ofrece registrarlo. */
+const dobleNo = () => LS.get('fm_dobleNo', []);
 function dobleCargo(r) {
-  if (!r || !r.c || r.unaVez || fq(r.c) !== 1 || !(+r.c.dia >= 1) || !(r.pag > 0)) return null;
+  if (!r || !r.c || r.c.activo === false || fq(r.c) !== 1 || !(r.pag > 0) || (r.p && r.p._virtual) || dobleNo().includes(r.id)) return null;
+  const fl = String((r.p && r.p.fechaLimite) || '');
+  const dia = /^\d{4}-\d{2}-\d{2}/.test(fl) ? +fl.slice(8, 10) : +r.c.dia; // el día de la fecha límite manda; si no hay, el del concepto
+  if (!(dia >= 1)) return null;
   const ini = cicloIni(S.mesId), fin = cicloFin(S.mesId), fs = [];
-  for (let ym = ini.slice(0, 7); ym <= fin.slice(0, 7); ym = addM(ym, 1)) { const f = diaEnMes(ym, r.c.dia); if (f >= ini && f <= fin) fs.push(f); }
+  for (let ym = ini.slice(0, 7); ym <= fin.slice(0, 7); ym = addM(ym, 1)) { const f = diaEnMes(ym, dia); if (f >= ini && f <= fin) fs.push(f); }
   if (fs.length < 2) return null;
   const filas = S.T.pagos.filter(p => p.mes === S.mesId && eq(p.concepto, r.nombre));
   return filas.length >= fs.length ? null : { f1: fs[0], f2: fs[1] };
@@ -900,6 +904,12 @@ function dobleCargoHTML(r) {
   const d = dobleCargo(r); if (!d) return '';
   return `<div class="box" style="border-color:var(--warn)">Este ciclo tiene dos cargos de ${esc(r.nombre)}: ${fLbl(d.f1)} y ${fLbl(d.f2)}. El pago que ya registraste cuenta como el del ${fLbl(d.f1)}.
     <div class="btns" style="margin-top:8px"><button type="button" class="btn sm pri" data-act2="doble">Registrar cargo del ${fLbl(d.f2)}</button></div></div>`;
+}
+function avisoDobles() {
+  const L = calc(S.mesId).rows.filter(dobleCargo); if (!L.length) return '';
+  return `<div class="box" style="border-color:var(--warn);color:var(--ink)"><b>${esc(mesLbl(S.mesId))} tiene dos cargos de ${L.length === 1 ? 'este pago' : 'estos pagos'}</b> (ciclo ${cicloRango(S.mesId)}). Ya registraste uno; falta el otro:
+    <div class="list" style="margin-top:8px">${L.map(r => { const d = dobleCargo(r); return `<div class="row flat"><div class="main"><div class="name">${esc(r.nombre)}</div><div class="meta"><span>Pagado ${fLbl(d.f1)} · falta ${fLbl(d.f2)}</span></div></div>
+      <div class="btns"><button class="btn sm pri" data-act="doble" data-id="${esc(r.id)}">Registrar ${fLbl(d.f2)}</button><button class="btn sm" data-act="dobleNo" data-id="${esc(r.id)}">No aplica</button></div></div>`; }).join('')}</div></div>`;
 }
 function sheetDobleCargo(id) {
   const r = linea(id), d = dobleCargo(r); if (!d) return;
@@ -1569,7 +1579,8 @@ document.addEventListener('click', e => {
     editCatIng: () => sheetCat(id || null, b.dataset.v, 'ingreso'), newCatIng: () => sheetCat(null, null, 'ingreso'),
     editCfg: () => sheetCfg(), newMeta: () => sheetMeta(null), editMeta: () => sheetMeta(id), abonar: () => abonar(id),
     newAhorro: () => sheetAhorro(null), editAhorro: () => sheetAhorro(id),
-    editMes: () => sheetMes(), cerrarCiclo: () => sheetCerrarCiclo(false), ajustar: () => sheetAjuste(), verAjuste: () => sheetVerAjuste(id), newTr: () => sheetTr(null, null), doTr: () => sheetTr(id, +b.dataset.v),
+    editMes: () => sheetMes(), cerrarCiclo: () => sheetCerrarCiclo(false), doble: () => sheetDobleCargo(id),
+    dobleNo: () => { const L = dobleNo(); if (!L.includes(id)) L.push(id); LS.set('fm_dobleNo', L); render(); }, ajustar: () => sheetAjuste(), verAjuste: () => sheetVerAjuste(id), newTr: () => sheetTr(null, null), doTr: () => sheetTr(id, +b.dataset.v),
     delTr: () => { if (!arm('tr' + id)) return; commit([DEL('transferencias', id)], 'Quitar transferencia', 'Transferencia quitada'); }
   };
   if (map[a]) map[a]();
