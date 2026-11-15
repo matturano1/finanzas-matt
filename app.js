@@ -465,7 +465,7 @@ function vResumen(k) {
   const o = saldos(S.mesId, k), dsp = dispersion(k, o);
   const movs = S.T.movimientos.filter(m => !esAjuste(m) && mesMov(m) === S.mesId).sort((a, b) => String(b.fecha).localeCompare(String(a.fecha))).slice(0, 6);
   const abierto = S.mesId === cicloAbierto();
-  return `${avisoEstructura()}${avisoDobles()}
+  return `${avisoCiclo()}${avisoEstructura()}${avisoDobles()}
   <section class="hero">
     <div class="label">Disponible hoy · todas tus cuentas · ciclo ${cicloRango(S.mesId)}</div>
     <div class="big num">${fmt(k.disp)}</div>
@@ -528,7 +528,7 @@ function vPagos(k) {
     body = order.map(c => grp(esc(c), by[c], '', nota(c), v === 'forma' ? '' : `<span class="dot" style="background:${v === 'cuenta' ? ctaColor(c) : catColor(c)};margin-right:8px"></span>`)).join('');
   }
   const movs = S.T.movimientos.filter(m => !esAjuste(m) && mesMov(m) === S.mesId).sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
-  return `${avisoDobles()}
+  return `${avisoCiclo()}${avisoDobles()}
   <div class="sec-h" style="margin:0"><h2>Pagos de ${mesLbl(S.mesId)} <span class="note" style="font-weight:400">· ${cicloRango(S.mesId)}</span></h2><div class="btns"><button class="btn sm" data-act="fechas">Fechas, forma y cuenta</button><button class="btn sm" data-act="newCon">Nuevo concepto</button></div></div>
   <div class="bar2">
     <div class="chips" role="group" aria-label="Filtro">
@@ -904,6 +904,12 @@ function dobleCargoHTML(r) {
   const d = dobleCargo(r); if (!d) return '';
   return `<div class="box" style="border-color:var(--warn)">Este ciclo tiene dos cargos de ${esc(r.nombre)}: ${fLbl(d.f1)} y ${fLbl(d.f2)}. El pago que ya registraste cuenta como el del ${fLbl(d.f1)}.
     <div class="btns" style="margin-top:8px"><button type="button" class="btn sm pri" data-act2="doble">Registrar cargo del ${fLbl(d.f2)}</button></div></div>`;
+}
+function avisoCiclo() {
+  const ab = cicloAbierto(); if (!(mesHoy() > ab)) return '';
+  const nid = addM(ab, 1);
+  return `<div class="box" style="border-color:var(--warn);color:var(--ink)"><b>${esc(mesLbl(nid))} ya empezó</b> (${cicloRango(nid)}). Sigues viendo ${esc(mesLbl(ab))} hasta que lo cierres.
+    <div class="btns" style="margin-top:8px"><button class="btn sm pri" data-act="abrirCiclo">Ya llegó mi pago · abrir ${esc(mesN(nid).toLowerCase())}</button><button class="btn sm" data-act="cerrarCiclo">Abrir sin registrar el pago</button></div></div>`;
 }
 function avisoDobles() {
   const L = calc(S.mesId).rows.filter(dobleCargo); if (!L.length) return '';
@@ -1507,12 +1513,11 @@ function completarDias() {
   if (ops.length) commit(ops, 'Días de pago', ops.length + ' días de pago tomados de tus fechas límite');
 }
 
-// Día 15 a las 5 pm: si el ciclo nuevo no se ha abierto, pregunta si ya llegó el pago mensual.
+// Desde el día 15 (a cualquier hora): si el ciclo nuevo no se ha abierto, pregunta al abrir la app si ya llegó el pago mensual.
 function revisarPago() {
   if (!S.T || !S.api || $('#sheet')) return;
   const ab = cicloAbierto(), hoyC = mesHoy();
   if (!(hoyC > ab)) return;
-  if (+hoyISO().slice(8) === DIA_CICLO && hoyC === hoyISO().slice(0, 7) && new Date().getHours() < HORA_PAGO) return;
   if (Date.now() < LS.get('fm_pagoPosp', 0)) return;
   LS.set('fm_pagoPosp', Date.now() + 30 * 60000); // si cierra la ventana sin contestar, vuelve a preguntar en media hora
   const nid = addM(ab, 1), pp = pagoPrincipal();
@@ -1579,7 +1584,7 @@ document.addEventListener('click', e => {
     editCatIng: () => sheetCat(id || null, b.dataset.v, 'ingreso'), newCatIng: () => sheetCat(null, null, 'ingreso'),
     editCfg: () => sheetCfg(), newMeta: () => sheetMeta(null), editMeta: () => sheetMeta(id), abonar: () => abonar(id),
     newAhorro: () => sheetAhorro(null), editAhorro: () => sheetAhorro(id),
-    editMes: () => sheetMes(), cerrarCiclo: () => sheetCerrarCiclo(false), doble: () => sheetDobleCargo(id),
+    editMes: () => sheetMes(), cerrarCiclo: () => sheetCerrarCiclo(false), abrirCiclo: () => sheetCerrarCiclo(true), doble: () => sheetDobleCargo(id),
     dobleNo: () => { const L = dobleNo(); if (!L.includes(id)) L.push(id); LS.set('fm_dobleNo', L); render(); }, ajustar: () => sheetAjuste(), verAjuste: () => sheetVerAjuste(id), newTr: () => sheetTr(null, null), doTr: () => sheetTr(id, +b.dataset.v),
     delTr: () => { if (!arm('tr' + id)) return; commit([DEL('transferencias', id)], 'Quitar transferencia', 'Transferencia quitada'); }
   };
