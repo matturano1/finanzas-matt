@@ -64,7 +64,7 @@ const S = {
   T: null, cfg: {}, faltantes: {}, calculadas: {},
   outbox: LS.get('fm_outbox', []),
   sync: 'idle', syncMsg: '', ts: null,
-  mesId: null, tab: LS.get('fm_tab', 'resumen'), filtro: LS.get('fm_f', 'pend'), vista: LS.get('fm_v', 'fecha'),
+  mesId: null, tab: LS.get('fm_tab', 'resumen'), filtro: LS.get('fm_f', 'pend'), vista: LS.get('fm_v', 'fecha'), mv: LS.get('fm_mv', 'lista'), mp: LS.get('fm_mp', 'ciclo'),
   flushing: false, install: null
 };
 (function cargarCache() {
@@ -507,6 +507,46 @@ function vResumen(k) {
   </section>`;
 }
 
+/* ---- gasto real: ver los movimientos por categoría, forma de pago, cuenta o concepto ---- */
+function mesesRango(per) {
+  if (per === 'todo') return null;
+  const [y, m] = S.mesId.split('-').map(Number), out = new Set();
+  for (let i = 0; i < (per === '3' ? 3 : 1); i++) { const d = new Date(y, m - 1 - i, 1); out.add(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')); }
+  return out;
+}
+function movMeta(m) {
+  const p = m.pagoId ? S.T.pagos.find(x => x.id === m.pagoId) : null, nom = m.concepto || (p && p.concepto) || '', c = conDe(nom);
+  const forma = (p && p.forma) || (c && c.forma) || 'Pago directo', tipo = tipoNorm(p && p.tipo) || (c ? tipoDe(c) : 'Extra');
+  return { nom: nom || 'Sin concepto', forma, cat: m.categoria || (p && p.categoria) || (c && c.categoria) || 'Otros',
+    cta: m.cuenta || cuentaRegla({ cuenta: (p && p.cuenta) || (c && c.cuenta), forma, tipo }) };
+}
+function vMovs() {
+  const v = S.mv, per = S.mp, R = mesesRango(per);
+  const movs = S.T.movimientos.filter(m => !esAjuste(m) && (!R || R.has(mesMov(m)))).sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
+  const tot = sum(movs, m => +m.monto || 0);
+  const perL = per === 'ciclo' ? mesN(S.mesId) : per === '3' ? 'últimos 3 ciclos' : 'todo el historial';
+  const chip = (act, val, cur, t) => `<button data-act="${act}" data-v="${val}" aria-pressed="${cur === val}">${t}</button>`;
+  let body;
+  if (!movs.length) body = '<p class="note">Sin movimientos en este periodo.</p>';
+  else if (v === 'lista') body = `<div class="list">${movs.map(movRowHTML).join('')}</div><p class="note" style="margin-top:8px">Toca un movimiento para corregirlo o eliminarlo si lo registraste por error.</p>`;
+  else {
+    const g = {};
+    movs.forEach(m => { const x = movMeta(m), k = v === 'cat' ? x.cat : v === 'forma' ? x.forma : v === 'cuenta' ? x.cta : x.nom; (g[k] = g[k] || []).push(m); });
+    const col = k => v === 'cat' ? catColor(k) : v === 'cuenta' ? ctaColor(k) : 'var(--cyan)';
+    body = Object.entries(g).map(([k, ms]) => [k, ms, sum(ms, m => +m.monto || 0)]).sort((a, b) => b[2] - a[2]).map(([k, ms, t]) => {
+      const pc = tot ? Math.round(t / tot * 100) : 0;
+      return `<details class="mgrp"><summary><span class="mg-t"><span class="dot" style="background:${col(k)};margin-right:8px"></span>${esc(k)} <span class="note">· ${ms.length}</span></span><span class="num">${fmt(t)} <span class="note">${pc}%</span></span></summary>
+        <div class="meter" style="margin:2px 0 6px"><i style="width:${pc}%;background:${col(k)}"></i></div><div class="list">${ms.map(movRowHTML).join('')}</div></details>`;
+    }).join('');
+  }
+  return `<section class="card">
+    <div class="sec-h"><h2>Gasto real · ${perL} · ${movs.length}</h2><button class="link" data-act="newGasto">+ Gasto</button></div>
+    <div class="bar2"><div class="chips" role="group" aria-label="Ver gasto por">${chip('mvista', 'lista', v, 'Lista')}${chip('mvista', 'cat', v, 'Categoría')}${chip('mvista', 'forma', v, 'Forma de pago')}${chip('mvista', 'cuenta', v, 'Cuenta')}${chip('mvista', 'concepto', v, 'Concepto')}</div>
+      <div class="chips" role="group" aria-label="Periodo">${chip('mper', 'ciclo', per, 'Este ciclo')}${chip('mper', '3', per, '3 ciclos')}${chip('mper', 'todo', per, 'Todo')}</div></div>
+    ${movs.length && v !== 'lista' ? `<div class="grp-h"><span>Total gastado</span><span class="num">${fmt(tot)}</span></div>` : ''}
+    ${body}
+  </section>`;
+}
 function vPagos(k) {
   const f = S.filtro, v = S.vista;
   let rows = k.rows.filter(r => !r.fuera);
@@ -530,7 +570,6 @@ function vPagos(k) {
     const nota = c => c === 'Cargo automático' ? '<p class="note" style="margin-top:6px">Se cobran solos: solo cuida que la cuenta tenga saldo antes de la fecha.</p>' : '';
     body = order.map(c => grp(esc(c), by[c], '', nota(c), v === 'forma' ? '' : `<span class="dot" style="background:${v === 'cuenta' ? ctaColor(c) : catColor(c)};margin-right:8px"></span>`)).join('');
   }
-  const movs = S.T.movimientos.filter(m => !esAjuste(m) && mesMov(m) === S.mesId).sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
   return `${avisoCiclo()}${avisoDobles()}
   <div class="sec-h" style="margin:0"><h2>Pagos de ${mesLbl(S.mesId)} <span class="note" style="font-weight:400">· ${cicloRango(S.mesId)}</span></h2><div class="btns"><button class="btn sm" data-act="revisar">Revisar gastos del ciclo</button><button class="btn sm" data-act="fechas">Fechas, forma y cuenta</button><button class="btn sm" data-act="newCon">Nuevo concepto</button></div></div>
   <div class="bar2">
@@ -552,10 +591,7 @@ function vPagos(k) {
       return `<div class="row flat"><button class="main" data-act="editCon" data-id="${esc(c.id)}"><div class="name">${esc(c.nombre)}</div><div class="meta"><span class="pill info">${n === 0 ? 'Ocasional · cuando compres' : p ? 'Próximo: ' + mesLbl(p) : 'Sin cargo este mes'}</span><span class="acct"><span class="dot" style="background:${catColor(c.categoria)}"></span>${esc(c.categoria || '')}</span></div></button><button class="btn sm" data-act="addLinea" data-id="${esc(c.id)}">Agregar a ${mesN(S.mesId)}</button></div>`; }).join('')}</div></details>` : ''}
   </section>
   <p class="note">Toca el círculo para registrar el pago: ya trae el monto completo, o escribe menos y marca “Cerrar el pago” para mandar el sobrante a ahorro. Toca el nombre para editar o eliminar.</p>
-  <section class="card">
-    <div class="sec-h"><h2>Movimientos de ${mesN(S.mesId)} · ${movs.length}</h2><button class="link" data-act="newGasto">+ Gasto</button></div>
-    ${movs.length ? `<div class="list">${movs.map(movRowHTML).join('')}</div><p class="note" style="margin-top:8px">Toca un movimiento para corregirlo o eliminarlo si lo registraste por error.</p>` : '<p class="note">Sin movimientos este mes.</p>'}
-  </section>`;
+  ${vMovs()}`;
 }
 
 function vCuentas(k) {
@@ -1622,6 +1658,8 @@ document.addEventListener('click', e => {
   if (a === 'tab') return goTab(b.dataset.v);
   if (a === 'ajustes') return goTab('ajustes');
   if (a === 'filtro') { S.filtro = b.dataset.v; LS.set('fm_f', S.filtro); return render(); }
+  if (a === 'mvista') { S.mv = b.dataset.v; LS.set('fm_mv', S.mv); return render(); }
+  if (a === 'mper') { S.mp = b.dataset.v; LS.set('fm_mp', S.mp); return render(); }
   if (a === 'vista') { S.vista = b.dataset.v; LS.set('fm_v', S.vista); return render(); }
   if (a === 'sincronizar') return sincronizar();
   if (a === 'conexion') return sheetConexion();

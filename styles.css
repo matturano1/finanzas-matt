@@ -215,3 +215,5 @@ img{max-width:100%}
 .kv{display:grid;grid-template-columns:1fr auto;gap:4px 12px;font-size:14px}
 .kv span:nth-child(even){text-align:right;font-family:var(--f-num)}
 .tag-new{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--violet)}
+
+.mgrp{border-bottom:1px solid var(--line2);padding:2px 0}.mgrp>summary{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:10px 0 6px;font-weight:600;cursor:pointer}.mgrp .mg-t{display:flex;align-items:center;min-width:0}
