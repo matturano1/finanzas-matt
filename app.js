@@ -243,8 +243,8 @@ function cuentaRegla(x) {
   if (x.cuenta && cuentaObj(x.cuenta)) return cuentaObj(x.cuenta).nombre;
   if (x.cuenta) return x.cuenta;
   const f = formaDe(x), t = x.tipo || 'Fijo', fij = (porRol('fijos') || {}).nombre, cor = (porRol('corriente') || {}).nombre, neg = (porRol('negocio') || {}).nombre;
-  if (x.negocio && neg) return neg; // todo negocio sale de la cuenta de negocio
-  if (f === 'Cargo automático') return fij || cIng();
+  if (f === 'Cargo automático') return fij || cIng(); // los cargos automáticos (incluso de negocio) salen de la cuenta de cargos fijos
+  if (x.negocio && neg) return neg; // el resto del negocio sale de la cuenta de negocio
   if (t === 'Variable' || t === 'Extra' || f === 'Efectivo' || f === 'Tarjeta de crédito') return cor || cIng();
   return fij || cIng();
 }
@@ -576,7 +576,8 @@ function vPagos(k) {
   const conLinea = new Set(k.rows.map(r => N(r.nombre)));
   const noToca = S.T.conceptos.filter(c => c.nombre && c.activo !== false && tipoDe(c) !== 'Extra' && !conLinea.has(N(c.nombre)));
   const sortF = (a, b) => (a.fecha || '9').localeCompare(b.fecha || '9') || b.comp - a.comp;
-  const grp = (t, rs, cls = '', tail = '', dot = '') => `<div class="grp"><div class="grp-h ${cls}"><span>${dot}${t} · ${rs.length}</span><span class="num">${fmt(sum(rs, r => f === 'pag' ? r.pag : r.comp))}</span></div><div class="list">${rs.sort(sortF).map(rowHTML).join('')}</div>${tail}</div>`;
+  const tres = a => `<div class="num" style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:6px 2px 8px;font-size:.78rem;color:var(--muted)"><span>Presupuesto<br><b style="color:var(--ink);font-size:.95rem">${fmt(sum(a, r => r.comp))}</b></span><span>Gastado<br><b style="color:var(--good);font-size:.95rem">${fmt(sum(a, r => r.pag))}</b></span><span>Por gastar<br><b style="color:var(--warn);font-size:.95rem">${fmt(sum(a, r => r.pend))}</b></span></div>`;
+  const grp = (t, rs, cls = '', tail = '', dot = '', todos) => `<div class="grp"><div class="grp-h ${cls}"><span>${dot}${t} · ${rs.length}</span></div>${tres(todos || rs)}<div class="list">${rs.sort(sortF).map(rowHTML).join('')}</div>${tail}</div>`;
   let body = '';
   if (v === 'fecha') {
     const Gs = [['Vencidos', 'crit', r => { const d = dueIn(r); return d != null && d < 0; }], ['Próximos 7 días', 'warn', r => { const d = dueIn(r); return d != null && d >= 0 && d <= 7; }], ['Más adelante este mes', '', r => { const d = dueIn(r); return d != null && d > 7; }], ['Sin fecha asignada', '', r => r.pend > 0 && !r.fecha || (r.plan === 0 && r.pag === 0 && !r.cerrado)], ['Pagados y cerrados', '', r => r.pend === 0]];
@@ -585,10 +586,11 @@ function vPagos(k) {
   } else {
     const key = v === 'cuenta' ? (r => r.cta) : v === 'forma' ? (r => r.forma) : (r => r.cat);
     const by = {}; rows.forEach(r => (by[key(r)] = by[key(r)] || []).push(r));
+    const all = {}; k.rows.filter(r => !r.fuera).forEach(r => (all[key(r)] = all[key(r)] || []).push(r)); // las sumas ignoran el filtro
     const base = v === 'cuenta' ? cuentas().map(c => c.nombre) : v === 'forma' ? FORMAS : catsGasto().map(c => c.nombre);
     const order = [...base, ...Object.keys(by)].filter((x, i, a) => by[x] && a.indexOf(x) === i);
     const nota = c => c === 'Cargo automático' ? '<p class="note" style="margin-top:6px">Se cobran solos: solo cuida que la cuenta tenga saldo antes de la fecha.</p>' : '';
-    body = order.map(c => grp(esc(c), by[c], '', nota(c), v === 'forma' ? '' : `<span class="dot" style="background:${v === 'cuenta' ? ctaColor(c) : catColor(c)};margin-right:8px"></span>`)).join('');
+    body = order.map(c => grp(esc(c), by[c], '', nota(c), v === 'forma' ? '' : `<span class="dot" style="background:${v === 'cuenta' ? ctaColor(c) : catColor(c)};margin-right:8px"></span>`, all[c])).join('');
   }
   return `${avisoCiclo()}${avisoDobles()}
   <div class="sec-h" style="margin:0"><h2>Pagos de ${mesLbl(S.mesId)} <span class="note" style="font-weight:400">· ${cicloRango(S.mesId)}</span></h2><div class="btns"><button class="btn sm" data-act="revisar">Revisar gastos del ciclo</button><button class="btn sm" data-act="fechas">Fechas, forma y cuenta</button><button class="btn sm" data-act="newCon">Nuevo concepto</button></div></div>
