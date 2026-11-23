@@ -1,7 +1,7 @@
 /* Finanzas Matt · service worker
    Archivos de la app: primero red (para ver siempre la última versión), caché si no hay internet.
    La API de Google no pasa por aquí: los datos sin conexión los guarda la app. */
-const CACHE = 'finanzas-matt-v13';
+const CACHE = 'finanzas-matt-v14';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png', 'icons/favicon-32.png'];
 
@@ -28,7 +28,9 @@ self.addEventListener('fetch', e => {
     })));
     return;
   }
-  e.respondWith(fetch(req).then(res => {
+  // red primero, pero con tiempo límite: en datos móviles lentos se abre desde la caché en vez de quedarse esperando
+  const conTiempo = new Promise((ok, no) => { const t = setTimeout(() => no(new Error('tiempo')), 4000); fetch(req).then(r => { clearTimeout(t); ok(r); }, x => { clearTimeout(t); no(x); }); });
+  e.respondWith(conTiempo.then(res => {
     if (res.ok) { const copia = res.clone(); caches.open(CACHE).then(c => c.put(req, copia)); }
     return res;
   }).catch(() => caches.match(req, { ignoreSearch: true })

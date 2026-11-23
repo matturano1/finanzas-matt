@@ -7,7 +7,7 @@
 /* ================= constantes ================= */
 const MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 const PAL = ['#4FD6F0','#2EC4B6','#9D86FF','#5B9DFF','#D07BE8','#7EE0B5','#F5C065','#FF8FA3'];
-const ROLES = [['fijos','Cargos fijos y recurrentes'],['corriente','Gasto corriente'],['ahorro','Ahorro e inversión'],['otro','Otro']];
+const ROLES = [['fijos','Cargos fijos y recurrentes'],['corriente','Gasto corriente'],['ahorro','Ahorro e inversión'],['negocio','Negocio'],['otro','Otro']];
 const FORMAS = ['Cargo automático','Transferencia','Pago directo','Tarjeta de crédito','Efectivo'];
 const TIPOS = ['Fijo','Variable','Extra'];
 const FREQ = [[1,'Mensual'],[2,'Bimestral'],[3,'Trimestral'],[6,'Semestral'],[12,'Anual'],[0,'Ocasional']];
@@ -75,12 +75,24 @@ const guardarCache = () => LS.set('fm_cache', { T: S.T, cfg: S.cfg, faltantes: S
 const guardarOutbox = () => LS.set('fm_outbox', S.outbox);
 
 /* ================= API ================= */
+const RED_MS = 25000;
+const infoRed = () => { const c = navigator.connection || {}; return (navigator.onLine === false ? 'sin red' : 'con red') + (c.effectiveType ? ' · ' + c.effectiveType : '') + (c.saveData ? ' · ahorro de datos activo' : ''); };
+async function fetchT(url, opt, ms) {
+  const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), ms || RED_MS);
+  try { return await fetch(url, Object.assign({}, opt, { signal: ctl.signal })); } finally { clearTimeout(t); }
+}
 async function api(accion, extra) {
-  let res;
-  try {
-    res = await fetch(S.api.url, { method: 'POST', redirect: 'follow', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify(Object.assign({ clave: S.api.clave, accion }, extra || {})) });
-  } catch (e) { const er = new Error('Sin conexión'); er.red = true; throw er; }
+  let res, ultimo;
+  for (let i = 0; i < 2 && !res; i++) { // un reintento: en datos móviles el primer intento suele fallar por cambios de red
+    try {
+      res = await fetchT(S.api.url, { method: 'POST', redirect: 'follow', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(Object.assign({ clave: S.api.clave, accion }, extra || {})) });
+    } catch (e) { ultimo = e; if (i === 0) await new Promise(r => setTimeout(r, 1500)); }
+  }
+  if (!res) {
+    const er = new Error(ultimo && ultimo.name === 'AbortError' ? 'La red tardó más de ' + RED_MS / 1000 + ' s en responder' : 'Sin conexión'); er.red = true;
+    er.det = (ultimo && ultimo.name || 'Error') + ': ' + (ultimo && ultimo.message || '') + ' · ' + infoRed(); S.ultimoErrRed = er.det; throw er;
+  }
   let j;
   try { j = await res.json(); } catch (e) { const er = new Error(res.ok ? 'La API no respondió JSON. Revisa que la URL termine en /exec y que el acceso sea “Cualquier usuario”.' : 'Error ' + res.status); er.server = true; throw er; }
   if (!j.ok) { const er = new Error(j.error || 'Error de la API'); er.server = true; er.codigo = j.codigo; throw er; }
@@ -150,9 +162,9 @@ async function sincronizar() {
       elegirMes();
       setSync('ok');
       completarDias();
-      if (!$('#sheet')) { render(); revisarPago(); }
+      if (!$('#sheet')) { render(); ofrecerConfig(); revisarPago(); }
     } catch (e) {
-      if (e.red) setSync('off'); else { setSync('err', e.message); if (e.codigo === 'clave') toast(e.message + ' Revisa la clave en Ajustes → Conexión.', 6000); }
+      if (e.red) setSync('off', e.det); else { setSync('err', e.message); if (e.codigo === 'clave') toast(e.message + ' Revisa la clave en Ajustes → Conexión.', 6000); }
     } finally { syncing = null; }
   })();
   return syncing;
@@ -190,12 +202,18 @@ const CFG = (clave, valor) => ({ op: 'config', clave, valor });
 
 /* ================= catálogos ================= */
 const colorDe = (x, i) => { const c = x && x.color; if (typeof c === 'string' && /^#/.test(c)) return c; if (c !== '' && c != null && isFinite(+c)) return PAL[(+c) % PAL.length]; return PAL[(i || 0) % PAL.length]; };
-const rolDe = c => { const u = N(c && c.uso); if (/fij|recurr/.test(u)) return 'fijos'; if (/corr|diari/.test(u)) return 'corriente'; if (/ahorr|invers/.test(u)) return 'ahorro'; return 'otro'; };
-const rolLbl = r => (ROLES.find(x => x[0] === r) || ROLES[3])[1];
+const rolDe = c => { const u = N(c && c.uso); if (/fij|recurr/.test(u)) return 'fijos'; if (/corr|diari/.test(u)) return 'corriente'; if (/ahorr|invers/.test(u)) return 'ahorro'; if (/negoc/.test(u)) return 'negocio'; return 'otro'; };
+const rolLbl = r => (ROLES.find(x => x[0] === r) || ROLES[ROLES.length - 1])[1];
 const cuentas = () => (S.T.cuentas || []).filter(c => c.nombre && c.activa !== false);
 const cuentaObj = n => (S.T.cuentas || []).find(c => eq(c.nombre, n));
 const ctaColor = n => { const L = S.T.cuentas || []; const i = L.findIndex(c => eq(c.nombre, n)); return i >= 0 ? colorDe(L[i], i) : 'var(--faint)'; };
-const porRol = r => cuentas().find(c => rolDe(c) === r);
+const SEP = ' · ';
+const padreDe = c => { const n = String((c && c.nombre) || ''), i = n.indexOf(SEP); if (i < 1) return null; const p = cuentaObj(n.slice(0, i)); return p ? p.nombre : null; };
+const esApartado = c => !!padreDe(c);
+const aptNom = c => String(c.nombre).slice(String(c.nombre).indexOf(SEP) + SEP.length);
+const apartadosDe = nombre => (S.T.cuentas || []).filter(c => c.nombre && c.activa !== false && esApartado(c) && eq(padreDe(c), nombre));
+// la regla automática usa cuentas principales; el ahorro sí puede ser un apartado (p. ej. “Ahorro mensual”)
+const porRol = r => cuentas().find(c => rolDe(c) === r && (r === 'ahorro' || !esApartado(c)));
 function cIng() {
   const c = S.cfg.cuentaIngresos; if (c && cuentaObj(c)) return cuentaObj(c).nombre;
   const r = cuentas().find(x => x.recibeIngresos); if (r) return r.nombre;
@@ -224,7 +242,8 @@ const formaDe = x => (x && x.forma) || 'Pago directo';
 function cuentaRegla(x) {
   if (x.cuenta && cuentaObj(x.cuenta)) return cuentaObj(x.cuenta).nombre;
   if (x.cuenta) return x.cuenta;
-  const f = formaDe(x), t = x.tipo || 'Fijo', fij = (porRol('fijos') || {}).nombre, cor = (porRol('corriente') || {}).nombre;
+  const f = formaDe(x), t = x.tipo || 'Fijo', fij = (porRol('fijos') || {}).nombre, cor = (porRol('corriente') || {}).nombre, neg = (porRol('negocio') || {}).nombre;
+  if (x.negocio && neg) return neg; // todo negocio sale de la cuenta de negocio
   if (f === 'Cargo automático') return fij || cIng();
   if (t === 'Variable' || t === 'Extra' || f === 'Efectivo' || f === 'Tarjeta de crédito') return cor || cIng();
   return fij || cIng();
@@ -267,7 +286,7 @@ function mkLinea(p, c, movs, mid) {
   const plan = +p.plan || 0, cerrado = !!p.cerrado;
   const tipo = tipoNorm(p.tipo) || (c ? tipoDe(c) : (p.unaVez ? 'Extra' : 'Fijo'));
   const forma = p.forma || (c && c.forma) || 'Pago directo';
-  const cta = cuentaRegla({ cuenta: p.cuenta || (c && c.cuenta), forma, tipo });
+  const cta = cuentaRegla({ cuenta: p.cuenta || (c && c.cuenta), forma, tipo, negocio: !!(c && c.negocio) });
   const fecha = p.fechaLimite || (c && c.dia ? fechaCiclo(mid, c.dia) : null);
   const pendBase = cerrado ? 0 : Math.max(r2(plan - pag), 0);
   const fuera = pendBase > 0 && !!fecha && fecha > cicloFin(mid); // vence después del 14: lo paga el siguiente ciclo
@@ -333,6 +352,7 @@ function dispersion(k, o) {
   const org = cIng(), ah = cAhorro(), moves = [];
   Object.values(o).forEach(a => {
     if (eq(a.nombre, org)) return;
+    if (esApartado(a.c) && !(ah && eq(a.nombre, ah)) && !(a.pend > 0)) return;
     let monto, mot;
     if (ah && eq(a.nombre, ah)) { monto = Math.max(0, a.pend) + Math.max(0, k.ahorroReal - a.tin); mot = `Ahorro del mes ${fmt(Math.max(0, k.ahorroReal))}${a.tin ? ' · ya llegaron ' + fmt(a.tin) : ''}`; }
     else { monto = Math.max(0, a.pend - Math.max(0, a.saldo)); mot = `${a.n} pagos pendientes por ${fmt(a.pend)} · saldo estimado ${fmt(a.saldo)}`; }
@@ -518,7 +538,7 @@ function movMeta(m) {
   const p = m.pagoId ? S.T.pagos.find(x => x.id === m.pagoId) : null, nom = m.concepto || (p && p.concepto) || '', c = conDe(nom);
   const forma = (p && p.forma) || (c && c.forma) || 'Pago directo', tipo = tipoNorm(p && p.tipo) || (c ? tipoDe(c) : 'Extra');
   return { nom: nom || 'Sin concepto', forma, cat: m.categoria || (p && p.categoria) || (c && c.categoria) || 'Otros',
-    cta: m.cuenta || cuentaRegla({ cuenta: (p && p.cuenta) || (c && c.cuenta), forma, tipo }) };
+    cta: m.cuenta || cuentaRegla({ cuenta: (p && p.cuenta) || (c && c.cuenta), forma, tipo, negocio: !!(c && c.negocio) }) };
 }
 function vMovs() {
   const v = S.mv, per = S.mp, R = mesesRango(per);
@@ -604,9 +624,11 @@ function vCuentas(k) {
   <section class="hero"><div class="label">Dinero en tus cuentas · estimado</div>
     <div class="big num">${fmt(tot)}</div>
     <div class="sub">Saldo inicial + ingresos recibidos − pagos ± transferencias, ahorros y ajustes de ${mesLbl(S.mesId)} (${cicloRango(S.mesId)}).</div></section>
-  <section class="accts">${Object.values(o).map(a => `<div class="acc" style="--c:${ctaColor(a.nombre)}"><div class="n"><span class="dot" style="background:${ctaColor(a.nombre)}"></span>${esc(a.nombre)}${eq(a.nombre, d.org) ? '<span class="pill info">Recibe ingresos</span>' : ''}</div>
-      <div class="r">${esc(rolLbl(rolDe(a.c)))}</div><div class="s">${fmt(a.saldo)}</div>
-      <div class="r">${a.n ? `${a.n} pagos pendientes · ${fmt(a.pend)}` : 'Sin pagos pendientes'}${a.tin ? ` · recibió ${fmt(a.tin)}` : ''}</div></div>`).join('')}</section>
+  <section class="accts">${Object.values(o).filter(a => !esApartado(a.c)).map(a => { const aps = Object.values(o).filter(x => esApartado(x.c) && eq(padreDe(x.c), a.nombre)), apT = sum(aps, x => x.saldo); return `<div class="acc" style="--c:${ctaColor(a.nombre)}"><div class="n"><span class="dot" style="background:${ctaColor(a.nombre)}"></span>${esc(a.nombre)}${eq(a.nombre, d.org) ? '<span class="pill info">Recibe ingresos</span>' : ''}</div>
+      <div class="r">${esc(rolLbl(rolDe(a.c)))}${aps.length ? ' · disponible' : ''}</div><div class="s">${fmt(a.saldo)}</div>
+      <div class="r">${a.n ? `${a.n} pagos pendientes · ${fmt(a.pend)}` : 'Sin pagos pendientes'}${a.tin ? ` · recibió ${fmt(a.tin)}` : ''}</div>
+      ${aps.length ? `<div class="r" style="margin-top:8px"><b>Apartados · ${fmt(apT)}</b> · total en la cuenta <b class="num">${fmt(a.saldo + apT)}</b></div>${aps.map(x => `<button type="button" class="r" data-act="editCta" data-id="${esc(x.c.id)}" style="display:flex;justify-content:space-between;gap:8px;width:100%;text-align:left;background:none;border:0;padding:3px 0;color:inherit"><span><span class="dot" style="background:${ctaColor(x.nombre)};margin-right:6px"></span>${esc(aptNom(x.c))}</span><b class="num">${fmt(x.saldo)}</b></button>`).join('')}` : ''}
+      <button type="button" class="link" data-act="newApt" data-id="${esc(a.c.id || '')}" style="margin-top:6px">+ Apartado</button></div>`; }).join('')}</section>
   <section class="card">
     <div class="sec-h"><h2>Cuánto mover a cada cuenta</h2><button class="link" data-act="newTr">Registrar transferencia</button></div>
     <div class="list">${d.moves.map(x => `<div class="move"><div><div class="flow">${acctTag(d.org)}<span class="arrow">→</span>${acctTag(x.a.nombre)}<b class="num" style="margin-left:4px">${fmt(x.monto)}</b></div><div class="note" style="margin-top:3px">${x.mot}</div></div>
@@ -621,7 +643,7 @@ function vCuentas(k) {
     <div class="sec-h"><h2>Ajustes de saldo · ${k.ajustes.length}</h2><button class="link" data-act="ajustar">Ajustar saldos</button></div>
     ${k.ajustes.length ? `<div class="list">${k.ajustes.map(ajusteRowHTML).join('')}</div>` : '<p class="note">Si lo que dice tu banco no cuadra con la app, usa “Ajustar saldos”: la diferencia queda registrada sin contar como gasto ni como ahorro.</p>'}
   </section>
-  <div class="btns"><button class="btn pri" data-act="ajustar">Ajustar saldos</button><button class="btn" data-act="ajustes">Editar cuentas</button><button class="btn" data-act="editMes">Saldos iniciales del ciclo</button></div>`;
+  <div class="btns"><button class="btn pri" data-act="ajustar">Ajustar saldos</button><button class="btn" data-act="newApt">Nuevo apartado</button><button class="btn" data-act="ajustes">Editar cuentas</button><button class="btn" data-act="editMes">Saldos iniciales del ciclo</button></div>`;
 }
 
 function vFugas(k) {
@@ -680,7 +702,7 @@ function vAhorro(k) {
 function vAjustes() {
   const cnt = {}; S.T.conceptos.forEach(c => cnt[N(c.categoria)] = (cnt[N(c.categoria)] || 0) + 1);
   const icnt = {}; S.T.ingresosFijos.forEach(c => icnt[N(c.categoria)] = (icnt[N(c.categoria)] || 0) + 1); S.T.ingresos.forEach(c => icnt[N(c.categoria)] = (icnt[N(c.categoria)] || 0) + 1);
-  const ccnt = {}; S.T.conceptos.filter(c => c.activo !== false).forEach(c => { const n = N(cuentaRegla({ cuenta: c.cuenta, forma: c.forma, tipo: tipoDe(c) })); ccnt[n] = (ccnt[n] || 0) + 1; });
+  const ccnt = {}; S.T.conceptos.filter(c => c.activo !== false).forEach(c => { const n = N(cuentaRegla({ cuenta: c.cuenta, forma: c.forma, tipo: tipoDe(c), negocio: !!c.negocio })); ccnt[n] = (ccnt[n] || 0) + 1; });
   const act = S.T.conceptos.filter(c => c.nombre && c.activo !== false).sort((a, b) => a.nombre.localeCompare(b.nombre));
   const ina = S.T.conceptos.filter(c => c.nombre && c.activo === false);
   const fA = S.T.ingresosFijos.filter(f => (f.nombre || f.fuente) && f.activo !== false), fI = S.T.ingresosFijos.filter(f => (f.nombre || f.fuente) && f.activo === false);
@@ -712,7 +734,7 @@ function vAjustes() {
   </section>
   <section class="card">
     <div class="sec-h"><h2>Conceptos de gasto · ${act.length}</h2><button class="link" data-act="newCon">+ Nuevo concepto</button></div>
-    <div class="list">${act.map(c => `<div class="row flat"><button class="main" data-act="editCon" data-id="${esc(c.id)}"><div class="name">${esc(c.nombre)}</div><div class="meta"><span class="acct"><span class="dot" style="background:${catColor(c.categoria)}"></span>${esc(c.categoria)}</span><span>${esc(tipoDe(c))}</span><span>${esc(formaDe(c))}</span>${acctTag(cuentaRegla({ cuenta: c.cuenta, forma: c.forma, tipo: tipoDe(c) }))}<span>${fqLbl(fq(c))}</span></div></button><span class="num note">${fmt(+c.monto || 0)}</span></div>`).join('')}</div>
+    <div class="list">${act.map(c => `<div class="row flat"><button class="main" data-act="editCon" data-id="${esc(c.id)}"><div class="name">${esc(c.nombre)}</div><div class="meta"><span class="acct"><span class="dot" style="background:${catColor(c.categoria)}"></span>${esc(c.categoria)}</span><span>${esc(tipoDe(c))}</span><span>${esc(formaDe(c))}</span>${acctTag(cuentaRegla({ cuenta: c.cuenta, forma: c.forma, tipo: tipoDe(c), negocio: !!c.negocio }))}<span>${fqLbl(fq(c))}</span></div></button><span class="num note">${fmt(+c.monto || 0)}</span></div>`).join('')}</div>
     ${ina.length ? `<details><summary>Inactivos (${ina.length})</summary><div class="list">${ina.map(c => `<div class="row flat"><button class="main" data-act="editCon" data-id="${esc(c.id)}"><div class="name">${esc(c.nombre)}</div><div class="meta">${esc(c.categoria)}</div></button><button class="btn sm" data-act="reactivar" data-id="${esc(c.id)}">Reactivar</button></div>`).join('')}</div></details>` : ''}
   </section>
   <section class="card">
@@ -854,6 +876,7 @@ function sheetGasto(preId) {
       ${fld('g_n', 'Nombre del gasto', '', 'text', 'maxlength="80" placeholder="Ej. Regalo, reparación, comida fuera"')}
       ${catSel('g_c', 'Categoría', cats, cats[0] && cats[0].nombre)}
       ${sel('g_fo', 'Forma de pago', FORMAS, 'Pago directo')}
+      ${tog('g_e', 'Es gasto del negocio (sale de la cuenta de negocio)', false)}
       ${seg('g_p', '¿Se repite?', [['una', 'Solo este mes'], ['perm', 'Permanente cada ciclo']], 'una')}
       <div data-when="g_p=una">${seg('g_t', 'Tipo de gasto', TIPOS.map(t => [t, t]), 'Extra')}</div>
       <div data-when="g_p=perm" class="stack">
@@ -897,7 +920,7 @@ function sheetGasto(preId) {
     const ops = [...cat.ops], pid = uid('p');
     if (perm) { // un permanente nunca es “Extra”: los extras no se repiten. Variable = base $0 (monto por definir cada ciclo).
       const q = +fd.get('g_q'); let dia = Math.round(num(fd.get('g_d'))); dia = dia >= 1 && dia <= 31 ? dia : '';
-      ops.push(G('conceptos', { id: uid('c'), nombre, categoria: cat.nombre, tipo, forma, cuenta, frecuencia: fqLbl(q), ancla: q > 1 ? S.mesId : '', dia, monto: tipo === 'Variable' ? 0 : monto, variable: tipo === 'Variable', suscripcion: false, negocio: false, activo: true }));
+      ops.push(G('conceptos', { id: uid('c'), nombre, categoria: cat.nombre, tipo, forma, cuenta, frecuencia: fqLbl(q), ancla: q > 1 ? S.mesId : '', dia, monto: tipo === 'Variable' ? 0 : monto, variable: tipo === 'Variable', suscripcion: false, negocio: !!fd.get('g_e'), activo: true }));
     }
     ops.push(G('pagos', { id: pid, mes: S.mesId, concepto: nombre, categoria: cat.nombre, tipo, forma, cuenta, plan: monto, pagado: monto, fechaPago: fecha, cerrado: false, sobrante: 0, unaVez: !perm }));
     ops.push(G('movimientos', { id: uid('m'), mes: S.mesId, fecha, concepto: nombre, categoria: cat.nombre, monto, cuenta, nota, tipo: 'Gasto improvisado', pagoId: pid }));
@@ -918,9 +941,9 @@ function sheetGasto(preId) {
   const syncCta = () => {
     const modo = new FormData(f).get('g_modo');
     if (modo === 'con') { const r = k.rows.find(x => x.id === $f('#g_l').value); if (r) { $f('#g_a').value = r.cta; $f('#gs_de').value = r.cta; } }
-    else { const fd = new FormData(f); $f('#g_a').value = cuentaRegla({ forma: fd.get('g_fo'), tipo: fd.get('g_p') === 'perm' ? fd.get('g_pt') : fd.get('g_t') }); }
+    else { const fd = new FormData(f); $f('#g_a').value = cuentaRegla({ forma: fd.get('g_fo'), tipo: fd.get('g_p') === 'perm' ? fd.get('g_pt') : fd.get('g_t'), negocio: !!fd.get('g_e') }); }
   };
-  f.addEventListener('input', upd); f.addEventListener('change', e => { if (['g_l', 'g_modo', 'g_fo', 'g_t', 'g_p', 'g_pt'].includes(e.target.name)) syncCta(); upd(); });
+  f.addEventListener('input', upd); f.addEventListener('change', e => { if (['g_l', 'g_modo', 'g_fo', 'g_t', 'g_p', 'g_pt', 'g_e'].includes(e.target.name)) syncCta(); upd(); });
   $f('[data-act2="nuevoCon"]').addEventListener('click', () => { closeSheet(); sheetCon(null, null, { tipo: 'Variable', volver: lid => sheetGasto(lid) }); });
   bindMetaCuenta(f, 'gs'); syncCta(); upd();
 }
@@ -1335,6 +1358,69 @@ function sheetCuenta(id) {
   });
 }
 
+function sheetApartado(padreId) {
+  const P = cuentas().filter(c => !esApartado(c));
+  if (!P.length) { toast('Primero crea una cuenta.'); return; }
+  const pre = P.find(c => c.id === padreId) || P[0];
+  openSheet(`<h3>Nuevo apartado</h3>${sel('ap_p', 'Dentro de la cuenta', P.map(c => c.nombre), pre.nombre)}
+    ${fld('ap_n', 'Nombre del apartado', '', 'text', 'required maxlength="40" placeholder="Ej. Deudas, Ahorro mensual, Insumos"')}
+    ${sel('ap_r', 'Para qué es', ROLES, 'otro')}
+    <p class="note">El apartado lleva su propio saldo, separado del disponible de la cuenta. Después lo cuadras con “Ajustar saldos”.</p>${actions('Crear apartado')}`, fd => {
+    const padre = String(fd.get('ap_p')), n = String(fd.get('ap_n') || '').trim().replace(/\s*·\s*/g, ' ');
+    if (!n) { toast('Escribe el nombre del apartado.'); return; }
+    const nombre = padre + SEP + n;
+    if (S.T.cuentas.some(c => eq(c.nombre, nombre))) { toast('Ya existe ese apartado.'); return; }
+    const pc = cuentaObj(padre), i = S.T.cuentas.indexOf(pc);
+    closeSheet(); commit([G('cuentas', { id: uid('ct'), nombre, uso: rolLbl(fd.get('ap_r')), color: colorDe(pc, i), recibeIngresos: false, activa: true })], 'Apartado ' + nombre, 'Apartado creado');
+  });
+}
+
+/* Configuración por enlace: #config=<json>. Los datos viajan en el enlace (nunca en el repositorio) y se aplican con un toque. */
+function leerEnlaceConfig() {
+  const h = location.hash || '';
+  if (!/^#config=/.test(h)) return;
+  try { const j = JSON.parse(decodeURIComponent(h.slice(8))); if (j && Array.isArray(j.cuentas)) LS.set('fm_cfgPend', j); } catch (e) { toast('El enlace de configuración no se pudo leer.'); }
+  history.replaceState(null, '', location.pathname + location.search);
+}
+function planConfig(j) {
+  const ops = [], lineas = [], reales = [];
+  const L = S.T.cuentas.filter(c => c.nombre);
+  j.cuentas.forEach((e, ix) => {
+    const re = new RegExp(String(e.buscar || e.nombre).replace(/[^\w\sáéíóúñ-]/gi, ''), 'i');
+    let pa = L.find(c => !esApartado(c) && re.test(N(c.nombre)) || (!esApartado(c) && re.test(c.nombre)));
+    if (!pa) { pa = { id: uid('ct'), nombre: String(e.nombre), uso: rolLbl(e.rol), color: PAL[(L.length + ix) % PAL.length], activa: true }; L.push(pa); ops.push(G('cuentas', pa)); lineas.push(`Crear cuenta <b>${esc(pa.nombre)}</b> · ${esc(rolLbl(e.rol))}`); }
+    else if (rolDe(pa) !== e.rol || pa.activa === false) { ops.push(G('cuentas', { id: pa.id, uso: rolLbl(e.rol), activa: true })); lineas.push(`<b>${esc(pa.nombre)}</b> pasa a uso: ${esc(rolLbl(e.rol))}`); }
+    if (typeof e.saldo === 'number') reales.push([pa.nombre, e.saldo]);
+    (e.apartados || []).forEach(a => {
+      const nombre = pa.nombre + SEP + String(a.nombre).replace(/\s*·\s*/g, ' ');
+      let ap = L.find(c => eq(c.nombre, nombre));
+      if (!ap) { ap = { id: uid('ct'), nombre, uso: rolLbl(a.rol), color: pa.color, recibeIngresos: false, activa: true }; L.push(ap); ops.push(G('cuentas', ap)); lineas.push(`Crear apartado <b>${esc(nombre)}</b> · ${esc(rolLbl(a.rol))}`); }
+      else if (rolDe(ap) !== a.rol || ap.activa === false) { ops.push(G('cuentas', { id: ap.id, uso: rolLbl(a.rol), activa: true })); lineas.push(`Apartado <b>${esc(nombre)}</b> pasa a uso: ${esc(rolLbl(a.rol))}`); }
+      if (typeof a.saldo === 'number') reales.push([nombre, a.saldo]);
+    });
+  });
+  return { ops, lineas, reales };
+}
+function ofrecerConfig() {
+  const j = LS.get('fm_cfgPend', null);
+  if (!j || !S.T || !S.api || $('#sheet')) return;
+  const pl = planConfig(j);
+  openSheet(`<h3>Aplicar reglas y saldos de cuentas</h3>
+    <div class="box">${(pl.lineas.length ? pl.lineas : ['Las cuentas y apartados ya existen.']).map(x => '<div>' + x + '</div>').join('')}</div>
+    <p class="note">Saldos reales a registrar hoy (la diferencia contra lo calculado queda como “Ajuste de saldo”, sin contar como gasto ni ahorro):</p>
+    <div class="list">${pl.reales.map(([n, v]) => `<div class="row flat"><div class="main"><div class="name">${esc(n)}</div></div><div class="amt num">${fmt(v)}</div></div>`).join('')}</div>
+    <p class="note">Reglas: cargos recurrentes → cuenta de uso “Cargos fijos y recurrentes”; negocio → “Negocio”; gasto personal → “Gasto corriente”.</p>
+    ${actions('Aplicar', '<button class="btn" value="no" style="margin-right:auto">Ahora no</button>')}`, (fd, btn) => {
+    if (btn === 'no') { LS.del('fm_cfgPend'); closeSheet(); return; }
+    LS.del('fm_cfgPend'); closeSheet();
+    commit(pl.ops, 'Cuentas y apartados', pl.ops.length ? 'Cuentas y apartados listos' : '');
+    const mid = cicloAbierto(); S.mesId = mid;
+    const o = saldos(mid, calc(mid)), aj = [];
+    pl.reales.forEach(([n, v]) => { const a = o[N(n)], est = a ? r2(a.saldo) : 0, d = r2(v - est); if (Math.abs(d) >= 0.5) aj.push(opAjuste(mid, n, d, 'Saldo real ' + fmt(v))); });
+    commit(aj, 'Saldos reales', aj.length ? aj.length + ' saldos ajustados' : 'Los saldos ya cuadraban');
+  });
+}
+
 function sheetCat(id, nombreSinId, kind) {
   const ing = kind === 'ingreso', tabla = ing ? 'categoriasIngreso' : 'categorias';
   const L = ing ? catsIngreso() : catsGasto();
@@ -1644,9 +1730,18 @@ function bindSetup() {
 function sheetConexion() {
   const a = S.api || {};
   openSheet(`<h3>Conexión con tu hoja</h3>${fld('q_u', 'URL de la API (termina en /exec)', a.url || '', 'url', 'autocomplete="off"')}${fld('q_k', 'Clave secreta', a.clave || '', 'password', 'autocomplete="off"')}
-    <p class="note">Si generaste una clave nueva en Apps Script, cámbiala aquí en cada dispositivo.</p>${actions('Probar y guardar')}`, async fd => {
+    <p class="note">Si generaste una clave nueva en Apps Script, cámbiala aquí en cada dispositivo.</p>${actions('Probar y guardar', '<button type="button" class="btn" data-act2="diag" style="margin-right:auto">Diagnóstico de red</button>')}`, async fd => {
     if (await probarYGuardar(fd.get('q_u'), fd.get('q_k'))) { closeSheet(); sincronizar(); }
-  });
+  }).querySelector('[data-act2="diag"]').addEventListener('click', () => sheetDiagnostico());
+}
+async function sheetDiagnostico() {
+  openSheet(`<h3>Diagnóstico de red</h3><div class="box" id="dg">Probando…</div><p class="note">Si falla solo con datos móviles, prueba otra vez con WiFi y manda una captura de este resultado.</p>${actions('Cerrar')}`, () => closeSheet());
+  const out = [], pon = () => { const b = $('#dg'); if (b) b.innerHTML = out.join('<br>'); };
+  const paso = async (nom, fn) => { const t0 = performance.now(); try { const r = await fn(); out.push('✔ ' + nom + ' · ' + Math.round(performance.now() - t0) + ' ms' + (r ? ' · ' + esc(r) : '')); } catch (e) { out.push('✖ ' + nom + ' · ' + Math.round(performance.now() - t0) + ' ms · ' + esc((e && e.name || 'Error') + ': ' + (e && e.message || ''))); } pon(); };
+  out.push('Red del teléfono: ' + esc(infoRed())); pon();
+  await paso('Abrir la app (GitHub Pages)', async () => { const r = await fetchT('manifest.webmanifest?t=' + Date.now(), { cache: 'no-store' }, 10000); if (!r.ok) throw new Error('HTTP ' + r.status); });
+  if (S.api) await paso('Google Apps Script (ping)', async () => { const j = await api('ping'); return 'versión ' + (j.version || '?'); });
+  else out.push('Sin API configurada'); pon();
 }
 
 /* ================= eventos ================= */
@@ -1673,7 +1768,7 @@ document.addEventListener('click', e => {
     reactivarFijo: () => commit([G('ingresosFijos', { id, activo: true })], 'Ingreso fijo', 'Ingreso fijo reactivado'),
     newIng: () => sheetIngreso(null), editIng: () => sheetIngreso(id), cerrarIng: () => sheetCerrarIng(id),
     newFijo: () => sheetFijo(null), editFijo: () => sheetFijo(id),
-    editCta: () => sheetCuenta(id), newCta: () => sheetCuenta(null),
+    editCta: () => sheetCuenta(id), newCta: () => sheetCuenta(null), newApt: () => sheetApartado(id || null), diag: () => sheetDiagnostico(),
     editCat: () => sheetCat(id || null, b.dataset.v, 'gasto'), newCat: () => sheetCat(null, null, 'gasto'),
     editCatIng: () => sheetCat(id || null, b.dataset.v, 'ingreso'), newCatIng: () => sheetCat(null, null, 'ingreso'),
     editCfg: () => sheetCfg(), newMeta: () => sheetMeta(null), editMeta: () => sheetMeta(id), abonar: () => abonar(id),
@@ -1697,9 +1792,11 @@ window.addEventListener('offline', () => setSync('off'));
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); S.install = e; if (S.tab === 'ajustes' && !$('#sheet')) render(); });
 
 /* ================= arranque ================= */
+leerEnlaceConfig();
 if (S.T) elegirMes();
 render();
 if (S.api) sincronizar();
+ofrecerConfig();
 revisarPago();
 setInterval(() => { if (document.visibilityState === 'visible') revisarPago(); }, 60000);
 })();
